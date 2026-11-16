@@ -1,4 +1,6 @@
-set -e
+#!/bin/bash
+set -eE
+trap 'echo "FAILED: line $LINENO: $BASH_COMMAND" >&2' ERR
 # --- MentholLinux configuration (LFS chapter 9 + 11 branding)
 echo menthol > /etc/hostname
 cat > /etc/hosts << "EOT"
@@ -117,9 +119,5 @@ PRETTY_NAME="MentholLinux 1.0 (LFS 13.1 systemd)"
 VERSION_CODENAME="menthol"
 HOME_URL="https://github.com/Satisfactorcraft/menthol"
 RELEASE_TYPE="stable"
-EOT
-cat > /etc/issue << "EOT"
-MentholLinux 1.0 \n \l
-
 EOT
 echo "=== DONE ch9"

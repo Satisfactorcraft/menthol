@@ -1,4 +1,6 @@
-set -e
+#!/bin/bash
+set -eE
+trap 'echo "FAILED: line $LINENO: $BASH_COMMAND" >&2' ERR
 # Shell experience: prompt, aliases, MOTD
 mkdir -p /etc/profile.d
 cat > /etc/profile.d/menthol.sh << "EOT"
@@ -13,17 +15,16 @@ export PS1
 alias ls='ls --color=auto'
 alias ll='ls -lah'
 alias grep='grep --color=auto'
-if [ -z "$MENTHOL_MOTD_SHOWN" ] && [ -r /etc/motd ] && shopt -q login_shell; then
-  cat /etc/motd
-  export MENTHOL_MOTD_SHOWN=1
-fi
+# /etc/motd is printed by login(1) (MOTD_FILE in /etc/login.defs) and by sshd, not here
 EOT
+if ! grep -q "MentholLinux: per-package shell snippets" /etc/profile; then
 cat >> /etc/profile << "EOT"
 
 # MentholLinux: per-package shell snippets
 for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
 unset f
 EOT
+fi
 cat > /etc/motd << "EOT"
 
   __  __            _   _           _
@@ -45,7 +46,7 @@ cat > /etc/skel/.bashrc << "EOT"
 # ~/.bashrc - interactive non-login shells
 [ -r /etc/profile.d/menthol.sh ] && . /etc/profile.d/menthol.sh
 EOT
-cp /etc/skel/.bash_profile /etc/skel/.bashrc /root/
+cp -n /etc/skel/.bash_profile /etc/skel/.bashrc /root/
 
 # Normal user in wheel (password set separately)
 getent group wheel >/dev/null
