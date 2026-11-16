@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-. /home/jan/LFS/lfs-env.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lfs-env.sh"
 cd $LFS/build
 echo "=== linux headers"
 tar -xf $LFS/sources/linux-7.1.8.tar.xz && cd linux-7.1.8

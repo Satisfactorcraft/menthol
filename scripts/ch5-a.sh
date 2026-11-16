@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-. /home/jan/LFS/lfs-env.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lfs-env.sh"
 mkdir -p $LFS/build && cd $LFS/build
 echo "=== binutils pass1"
 rm -rf binutils-2.47 && tar -xf $LFS/sources/binutils-2.47.tar.xz && cd binutils-2.47

@@ -1,7 +1,7 @@
-# Source this file: . /home/jan/LFS/lfs-env.sh
+# Source this file: . <repo>/lfs-env.sh
 set +h
 umask 022
-export LFS=/mnt/lfs
+export LFS=${LFS:-/mnt/lfs}
 export LC_ALL=POSIX
 export LFS_TGT=$(uname -m)-lfs-linux-gnu
 export PATH=/usr/bin

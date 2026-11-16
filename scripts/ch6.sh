@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-. /home/jan/LFS/lfs-env.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lfs-env.sh"
 cd $LFS/build
 S=$LFS/sources
 # unpack TARBALL -> enters source dir
