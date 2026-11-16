@@ -110,7 +110,7 @@ def expect(name, command, pattern=None, t=15, answer=None):
         return check(name, rc == 0, f"exit status {rc}")
     check(name, re.search(pattern, out, re.M), "unexpected output")
 
-booted = wait_for(r"menthol login:", 150)
+booted = wait_for(r"^\S+ login:", 150)
 check("boot to login prompt", booted, "no login prompt within the time limit")
 if booted:
     send("menthol\n")

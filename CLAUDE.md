@@ -18,12 +18,16 @@ MentholLinux is a Linux From Scratch build following the LFS 13.1 systemd book. 
 - `scripts/ch6.sh`: cross-compiled temporary tools.
 - `scripts/ch8-lib.sh`, `ch8-a.sh`, `ch8-b.sh`, `ch8-c.sh`: final system, run inside the chroot.
 - `scripts/ch7.sh`: chapter 7, reconstructed from the book and not yet run (refuses to run if `/etc/passwd` exists).
-- `scripts/blfs-extras.sh`, `hardening.sh`: optional tools (unpinned versions, see `extras-sources.txt`) and security defaults. Not yet run against an image.
+- `scripts/hardening.sh`: sysctl, sshd drop-in, nftables ruleset. Not yet run against an image.
+- `packages/<name>/recipe` + `packages/order.txt`: mpkg recipes (format in `packages/README.md`). which, nano, tree, rsync are pinned and were built on Ubuntu; htop, libevent, tmux, libmnl, libnftnl, nftables are UNVERIFIED (`sha256=(SKIP)`). `scripts/packages.sh` builds them in the chroot into `/lfs-scripts/out`.
+- `scripts/mkimage.sh` (untested, needs parted), `scripts/fetch-sources.sh` (tested against the 13.1 wget-list).
+- `scripts/files/menthol-setup`: first-boot setup, installed by `polish.sh`; writes `/etc/menthol/setup-done`.
+- `tests/mpkg-test.sh`: mpkg test suite (`./build.sh test-mpkg`), also run in CI. Add a test for every mpkg change.
 - `scripts/files/menthol-info`: system summary tool, installed by `polish.sh`.
 - `scripts/host-lib.sh`: shared paths for host helpers (`MENTHOL_HOME`, `MENTHOL_IMG`, `LFS`); nothing hard-codes `/home/jan/LFS` any more.
-- `scripts/files/mpkg`: package manager (bash). `.tar.xz` packages with `.MPKG/info`, repos in `/etc/mpkg/repos.conf` (default: the `packages` GitHub release), database in `/var/lib/mpkg`. Installed by `mpkg-setup.sh`. Tested only in a sandbox with `--root`, not in the image.
+- `scripts/files/mpkg`: package manager (bash). `.tar.xz` packages with `.MPKG/info`, repos in `/etc/mpkg/repos.conf` (default: the `packages` GitHub release), database in `/var/lib/mpkg`. Installed by `mpkg-setup.sh`. Supports signed lists (`/etc/mpkg/keys/<repo>.pub`, OpenSSL), version constraints, hold, and `mpkg make` for recipes. Tested only in a sandbox with `--root`, not in the image. No signing key exists yet: the owner must run `mpkg keygen` and commit the public key as `scripts/files/mpkg-menthol.pub`.
 - `scripts/desktop.sh`: `DESKTOP=none|xfce|kde|gnome` runs `mpkg install desktop-<name>`; selected with `build.sh --desktop NAME`, meant to become a Calamares option. No desktop packages are published yet.
-- `build.sh`: driver (`list`, `mount`, `umount`, `sync`, `run STAGE...`, `test`, `lint`), logs to `logs/<stage>.log`.
+- `build.sh`: driver (`mkimage`, `fetch`, `list`, `mount`, `umount`, `sync`, `run STAGE...`, `test`, `test-mpkg`, `lint`), logs to `logs/<stage>.log`.
 - `.github/workflows/lint.yml`: runs `./build.sh lint` (bash -n, py_compile, shellcheck at error level).
 - Outside the repo: `menthol.img`, `sources/` (98 tarballs, md5-verified), `book/` (LFS 13.1 extract), `logs/`.
 

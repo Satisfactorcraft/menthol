@@ -1,6 +1,6 @@
 # Security defaults: sysctl, sshd, and an nftables firewall. NOT run or tested yet.
 #   SSH_KEY_ONLY=1   also turn off password logins over SSH (put a key in ~/.ssh/authorized_keys first!)
-# The firewall is only enabled when nft is installed (blfs-extras.sh) and the installed kernel
+# The firewall is only enabled when nft is installed (packages stage, or: mpkg install nftables) and the installed kernel
 # has nf_tables (ch10-kernel.sh enables it, so that needs a kernel rebuild on an older image).
 set -e
 
@@ -104,7 +104,7 @@ WantedBy=sysinit.target
 EOT
 kconf=$(find /boot -maxdepth 1 -name 'config-*' | sort -V | tail -n 1)
 if [ ! -x /usr/sbin/nft ]; then
-  echo "--- firewall NOT enabled: nft is not installed (build nftables with blfs-extras.sh)"
+  echo "--- firewall NOT enabled: nft is not installed (mpkg install nftables)"
 elif [ -z "$kconf" ] || ! grep -q '^CONFIG_NF_TABLES=[ym]' "$kconf"; then
   echo "--- firewall NOT enabled: the installed kernel has no nf_tables (rebuild with ch10-kernel.sh)"
 else

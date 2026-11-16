@@ -15,6 +15,7 @@ alias ll='ls -lah'
 alias grep='grep --color=auto'
 if [ -z "$MENTHOL_MOTD_SHOWN" ] && [ -r /etc/motd ] && shopt -q login_shell; then
   cat /etc/motd
+  [ -e /etc/menthol/setup-done ] || echo "  First boot? Run 'sudo menthol-setup' to set passwords, hostname and timezone."
   export MENTHOL_MOTD_SHOWN=1
 fi
 EOT
@@ -51,5 +52,8 @@ cp /etc/skel/.bash_profile /etc/skel/.bashrc /root/
 getent group wheel >/dev/null || groupadd -g 97 wheel
 id menthol >/dev/null 2>&1 || useradd -m -G wheel -s /bin/bash menthol
 # menthol-info (system summary tool)
-if [ -f /lfs-scripts/files/menthol-info ]; then install -v -m755 /lfs-scripts/files/menthol-info /usr/bin/menthol-info; fi
+# menthol-setup (first-boot setup)
+for f in menthol-info menthol-setup; do
+  if [ -f /lfs-scripts/files/$f ]; then install -v -m755 /lfs-scripts/files/$f /usr/bin/$f; fi
+done
 echo "=== DONE polish"

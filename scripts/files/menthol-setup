@@ -1,0 +1,126 @@
+#!/bin/bash
+# menthol-setup: first-boot setup for MentholLinux (passwords, hostname, timezone, keymap)
+set -u
+ROOT=""; HOSTNAME_NEW=""; TZ_NEW=""; KEYMAP_NEW=""; USER_NEW=""
+PASSWORDS=1; INTERACTIVE=1; NEWKEYS=""
+
+usage() {
+  cat << EOT
+usage: menthol-setup [OPTIONS]
+
+Without options it asks for everything. Press Enter to keep the value in brackets.
+
+  --hostname NAME     set the hostname
+  --timezone ZONE     set the timezone, for example Europe/Berlin
+  --keymap MAP        set the console keymap, for example de-latin1
+  --user NAME         create this user (in wheel) if it does not exist
+  --new-ssh-keys      delete the SSH host keys so sshd creates new ones
+  --no-passwords      do not ask for passwords
+  --non-interactive   ask nothing, only apply the options given
+  --root DIR          set up a system mounted at DIR (for installers)
+EOT
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --hostname) HOSTNAME_NEW=${2:-}; shift ;;
+    --timezone) TZ_NEW=${2:-}; shift ;;
+    --keymap) KEYMAP_NEW=${2:-}; shift ;;
+    --user) USER_NEW=${2:-}; shift ;;
+    --root) ROOT=${2:-}; ROOT=${ROOT%/}; shift ;;
+    --new-ssh-keys) NEWKEYS=y ;;
+    --no-passwords) PASSWORDS=0 ;;
+    --non-interactive) INTERACTIVE=0; PASSWORDS=0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "menthol-setup: unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+die() { echo "menthol-setup: $*" >&2; exit 1; }
+if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then die "this needs root (try: sudo menthol-setup)"; fi
+[ -d "$ROOT/etc" ] || die "$ROOT/etc does not exist"
+in_root() { if [ -n "$ROOT" ]; then chroot "$ROOT" "$@"; else "$@"; fi; }
+
+valid_hostname() { [[ $1 =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
+valid_timezone() { [ -n "$1" ] && [[ $1 != *..* ]] && [ -f "$ROOT/usr/share/zoneinfo/$1" ]; }
+valid_keymap() {
+  [[ $1 =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [ -d "$ROOT/usr/share/keymaps" ] || return 0   # cannot check, accept it
+  [ -n "$(find "$ROOT/usr/share/keymaps" -name "$1.map*" -print -quit)" ]
+}
+valid_user() { [[ $1 =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; }
+
+# ask VAR PROMPT DEFAULT VALIDATOR
+ask() {
+  local var=$1 prompt=$2 def=$3 check=$4 a
+  if [ -n "${!var}" ]; then "$check" "${!var}" || die "invalid value for $prompt: ${!var}"; return; fi
+  [ $INTERACTIVE -eq 1 ] || return 0
+  while true; do
+    read -r -p "$prompt [$def]: " a || { echo; a=""; }
+    [ -n "$a" ] || { printf -v "$var" '%s' ""; return; }
+    if "$check" "$a"; then printf -v "$var" '%s' "$a"; return; fi
+    echo "  not valid, try again (Enter keeps $def)"
+  done
+}
+
+cur_host=$(cat "$ROOT/etc/hostname" 2> /dev/null || echo menthol)
+cur_tz=$(readlink "$ROOT/etc/localtime" 2> /dev/null | sed 's|.*/zoneinfo/||'); cur_tz=${cur_tz:-UTC}
+cur_keymap=$(sed -n 's/^KEYMAP=//p' "$ROOT/etc/vconsole.conf" 2> /dev/null | head -n 1); cur_keymap=${cur_keymap:-us}
+
+[ $INTERACTIVE -eq 1 ] && echo "MentholLinux setup. Press Enter to keep the value in brackets."
+ask HOSTNAME_NEW "Hostname" "$cur_host" valid_hostname
+ask TZ_NEW "Timezone" "$cur_tz" valid_timezone
+ask KEYMAP_NEW "Console keymap" "$cur_keymap" valid_keymap
+ask USER_NEW "Create a user (name)" "none" valid_user
+if [ -z "$NEWKEYS" ] && [ $INTERACTIVE -eq 1 ] && ls "$ROOT"/etc/ssh/ssh_host_*_key > /dev/null 2>&1; then
+  read -r -p "Create new SSH host keys? Do this if the image was copied from somewhere [y/N]: " NEWKEYS || NEWKEYS=""
+fi
+
+if [ -n "$HOSTNAME_NEW" ] && [ "$HOSTNAME_NEW" != "$cur_host" ]; then
+  echo "$HOSTNAME_NEW" > "$ROOT/etc/hostname"
+  if [ -f "$ROOT/etc/hosts" ]; then
+    sed -i -E "s/^(127\.0\.0\.1[[:space:]]+localhost)([[:space:]].*)?$/\1 $HOSTNAME_NEW/" "$ROOT/etc/hosts"
+  fi
+  if [ -z "$ROOT" ] && [ -d /run/systemd/system ]; then hostnamectl set-hostname "$HOSTNAME_NEW" 2> /dev/null || true; fi
+  echo "hostname: $HOSTNAME_NEW"
+fi
+if [ -n "$TZ_NEW" ] && [ "$TZ_NEW" != "$cur_tz" ]; then
+  ln -sfn "/usr/share/zoneinfo/$TZ_NEW" "$ROOT/etc/localtime"
+  echo "timezone: $TZ_NEW"
+fi
+if [ -n "$KEYMAP_NEW" ] && [ "$KEYMAP_NEW" != "$cur_keymap" ]; then
+  if grep -q '^KEYMAP=' "$ROOT/etc/vconsole.conf" 2> /dev/null; then
+    sed -i "s/^KEYMAP=.*/KEYMAP=$KEYMAP_NEW/" "$ROOT/etc/vconsole.conf"
+  else
+    echo "KEYMAP=$KEYMAP_NEW" >> "$ROOT/etc/vconsole.conf"
+  fi
+  if [ -z "$ROOT" ]; then loadkeys "$KEYMAP_NEW" 2> /dev/null || true; fi
+  echo "keymap: $KEYMAP_NEW"
+fi
+if [ -n "$USER_NEW" ]; then
+  if grep -q "^$USER_NEW:" "$ROOT/etc/passwd" 2> /dev/null; then
+    echo "user $USER_NEW already exists"
+  else
+    in_root useradd -m -G wheel -s /bin/bash "$USER_NEW" || die "could not create user $USER_NEW"
+    echo "user: $USER_NEW (member of wheel, may use sudo)"
+  fi
+fi
+case $NEWKEYS in
+  y|Y|yes)
+    rm -f "$ROOT"/etc/ssh/ssh_host_*
+    if [ -z "$ROOT" ] && [ -d /run/systemd/system ]; then systemctl try-restart sshd 2> /dev/null || true; fi
+    echo "SSH host keys: removed, sshd creates new ones when it starts" ;;
+esac
+if [ $PASSWORDS -eq 1 ]; then
+  users="root"
+  for u in menthol "$USER_NEW"; do
+    [ -n "$u" ] && grep -q "^$u:" "$ROOT/etc/passwd" 2> /dev/null && users="$users $u"
+  done
+  for u in $(printf '%s\n' $users | awk '!seen[$0]++'); do
+    echo "Password for $u:"
+    until in_root passwd "$u"; do echo "  try again"; done
+  done
+fi
+mkdir -p "$ROOT/etc/menthol"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$ROOT/etc/menthol/setup-done"
+echo "Setup finished."

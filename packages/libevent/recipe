@@ -1,0 +1,13 @@
+# UNVERIFIED: version and URL were not checked against upstream, and the checksum is not pinned.
+name=libevent
+version=2.1.12
+desc="Event notification library"
+source=(https://github.com/libevent/libevent/releases/download/release-$version-stable/libevent-$version-stable.tar.gz)
+sha256=(SKIP)
+build() {
+  cd libevent-$version-stable
+  sed -i 's/python/&3/' event_rpcgen.py
+  ./configure --prefix=/usr --disable-static
+  make
+  make DESTDIR="$PKG" install
+}

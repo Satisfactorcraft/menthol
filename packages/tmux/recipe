@@ -1,0 +1,13 @@
+# UNVERIFIED: version and URL were not checked against upstream, and the checksum is not pinned.
+name=tmux
+version=3.5a
+desc="Terminal multiplexer"
+depends="libevent"
+source=(https://github.com/tmux/tmux/releases/download/$version/tmux-$version.tar.gz)
+sha256=(SKIP)
+build() {
+  cd tmux-$version
+  ./configure --prefix=/usr
+  make
+  make DESTDIR="$PKG" install
+}

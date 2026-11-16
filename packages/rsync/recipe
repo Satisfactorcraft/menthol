@@ -1,0 +1,11 @@
+name=rsync
+version=3.5.2
+desc="Fast incremental file transfer"
+source=(https://download.samba.org/pub/rsync/src/rsync-$version.tar.gz)
+sha256=(a10d591825251e070f74c98df3daad195def4ed81b4a2de16169026aea33f6c8)
+build() {
+  cd rsync-$version
+  ./configure --prefix=/usr --disable-xxhash --disable-idn --without-included-zlib
+  make
+  make DESTDIR="$PKG" install
+}

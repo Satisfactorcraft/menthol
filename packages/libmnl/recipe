@@ -1,0 +1,12 @@
+# UNVERIFIED: version and URL were not checked against upstream, and the checksum is not pinned.
+name=libmnl
+version=1.0.5
+desc="Minimalistic netlink library"
+source=(https://www.netfilter.org/projects/libmnl/files/libmnl-$version.tar.bz2)
+sha256=(SKIP)
+build() {
+  cd libmnl-$version
+  ./configure --prefix=/usr --disable-static
+  make
+  make DESTDIR="$PKG" install
+}

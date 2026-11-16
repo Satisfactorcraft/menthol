@@ -1,0 +1,11 @@
+# Build order for the packages stage: dependencies first
+which
+nano
+tree
+rsync
+htop
+libevent
+tmux
+libmnl
+libnftnl
+nftables

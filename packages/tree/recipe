@@ -1,0 +1,10 @@
+name=tree
+version=2.2.1
+desc="Lists directories as a tree"
+source=(https://gitlab.com/OldManProgrammer/unix-tree/-/archive/$version/unix-tree-$version.tar.gz)
+sha256=(70d9c6fc7c5f4cb1f7560b43e2785194594b9b8f6855ab53376f6bd88667ee04)
+build() {
+  cd unix-tree-$version
+  make
+  make PREFIX="$PKG/usr" MANDIR="$PKG/usr/share/man" install
+}

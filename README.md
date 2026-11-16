@@ -15,7 +15,8 @@ extract (`book/`) and the build logs (`logs/`) live next to the checkout and are
 - curl, wget, sudo, OpenSSH (root login off) and git from BLFS
 - A branded prompt and MOTD, the user `menthol` in `wheel`, and `menthol-info` for a quick system summary
 - `mpkg`, a small package manager for `.tar.xz` packages with repositories, dependencies and upgrades
-- Optional: nano, htop, tmux, rsync, tree, which, nftables (`blfs-extras`) and security defaults (`hardening`)
+- `menthol-setup` for the first boot: passwords, hostname, timezone, keymap
+- Optional packages built from recipes in `packages/` (nano, htop, tmux, rsync, tree, which, nftables) and security defaults (`hardening`)
 
 ## Requirements
 
@@ -29,6 +30,8 @@ extract (`book/`) and the build logs (`logs/`) live next to the checkout and are
 `build.sh` runs the stages in order and writes one log per stage to `logs/`.
 
 ```
+./build.sh mkimage         # new, empty, partitioned menthol.img (only for a fresh build)
+./build.sh fetch           # download the LFS sources and check their md5sums
 ./build.sh list            # stages in build order
 ./build.sh mount           # attach menthol.img at /mnt/lfs
 ./build.sh run ch8-a       # run one or more stages
@@ -44,34 +47,31 @@ extract (`book/`) and the build logs (`logs/`) live next to the checkout and are
 | `ch9` | chroot | network, locale, fstab, branding |
 | `ch10-kernel` | chroot | kernel |
 | `boot-extras` | chroot | GRUB for UEFI and BIOS, boot menu |
-| `polish` | chroot | prompt, MOTD, `menthol-info`, user `menthol` |
+| `polish` | chroot | prompt, MOTD, `menthol-info`, `menthol-setup`, user `menthol` |
 | `blfs`, `blfs-git` | chroot | curl, wget, sudo, OpenSSH, git |
 | `mpkg-setup` | chroot | the `mpkg` package manager |
-| `blfs-extras` | chroot | optional tools, see below |
+| `packages` | chroot | builds and installs the recipes in `packages/` |
 | `hardening` | chroot | sysctl defaults, sshd settings, firewall |
 | `desktop` | chroot | the desktop picked with `--desktop` (default: none) |
 
 Host stages run as your user with a clean environment. Chroot stages are copied to
 `/lfs-scripts` inside the image and run there as root.
 
-Not scripted: creating and partitioning the image (GPT with a bios_grub partition at sectors
-34-2047, an EFI partition labelled `MENTHOLEFI` and an ext4 root labelled `MentholRoot`),
-downloading the sources, and setting the passwords for `root` and `menthol`.
+`mkimage` creates a GPT image with an EFI partition (`MENTHOLEFI`), an ext4 root
+(`MentholRoot`) and a bios_grub partition at sectors 34-2047. It never overwrites an existing
+image. Not scripted: the BLFS tarballs for `blfs` and `blfs-git`, the `chown` to root before
+`ch7` (`build.sh` tells you the command), and the first passwords.
 
 The image and mount point default to `menthol.img` in the checkout and `/mnt/lfs`. Override
 them with `MENTHOL_IMG` and `LFS`.
 
 ### Status of the newer scripts
 
-`ch7`, `mpkg-setup`, `blfs-extras`, `hardening` and `desktop` have not been run against an image yet. They pass a syntax
-check and shellcheck, nothing more. `ch7` is a reconstruction from the book, because the script
+`mkimage`, `ch7`, `mpkg-setup`, `packages`, `hardening` and `desktop` have not been run against an image yet. They pass a syntax
+check and shellcheck, nothing more. `mpkg` itself has a test suite (`./build.sh test-mpkg`),
+and `fetch` and `menthol-setup` were tried outside the image. `ch7` is a reconstruction from the book, because the script
 that built the current image was never committed. It refuses to run on a system that already
 has `/etc/passwd`.
-
-### Optional packages
-
-`blfs-extras` builds whatever it finds in `sources/` and skips the rest, so versions are not
-pinned. `scripts/extras-sources.txt` lists where to get each tarball.
 
 ### Hardening
 
@@ -95,6 +95,7 @@ mpkg install ./foo-1.0-1-x86_64.tar.xz
 mpkg upgrade             # refresh the lists and upgrade everything
 mpkg remove nano
 mpkg autoremove          # drop dependencies nothing needs any more
+mpkg hold nano           # keep a package at its version during upgrades
 mpkg list | info NAME | files NAME | owner PATH | verify | clean
 ```
 
@@ -102,24 +103,19 @@ It keeps changed files in `/etc` (the new version lands next to them as `.mpkgne
 to overwrite files of other packages, and only removes directories it created itself.
 `--root DIR` works on a system mounted somewhere else.
 
-Limits to know about: downloads are checked against the SHA-256 in the package list, but the
-list itself is not signed, so the repository is trusted as far as HTTPS goes. Dependencies have
-no version constraints. The LFS base system is not registered as packages, so do not list base
-libraries such as glibc as dependencies.
+A dependency can carry a version, for example `libfoo>=1.2`. The LFS base system is not
+registered as packages, so do not list base libraries such as glibc as dependencies.
 
-### Publishing packages
+Downloads are checked against the SHA-256 in the package list. The list itself is checked
+against an OpenSSL signature when the repository's public key is in `/etc/mpkg/keys/`. Without
+a key the list is only as trustworthy as HTTPS, and `mpkg update` says so.
 
-Repositories are listed in `/etc/mpkg/repos.conf`. The default one is the `packages` release
-of this GitHub repository. To publish:
+### Building and publishing packages
 
-```
-make DESTDIR=$PWD/stage install                      # in the package's source tree
-mpkg build -n nano -v 8.5 -d "which" -D "Small text editor" -o out stage
-mpkg index out                                       # writes out/mpkg.index
-gh release upload packages out/* --clobber           # upload the packages and mpkg.index
-```
-
-Nothing has been published yet, so `mpkg update` finds no list until the `packages` release exists.
+Recipes live in `packages/`, see [packages/README.md](packages/README.md) for the format, the
+state of each recipe and how to sign and upload. The default repository is the `packages`
+release of this GitHub repository. Nothing has been published yet and no signing key exists
+yet, so `mpkg update` finds no list until that release exists.
 
 ### Desktop
 
@@ -132,6 +128,18 @@ The `desktop` stage records the choice in `/etc/menthol/desktop` and runs
 the whole desktop. They do not exist yet, so today only `--desktop none` (the default) works.
 An installer such as Calamares can offer the same choice later by running that one command.
 
+## First boot
+
+The image ships with temporary passwords. Log in and run:
+
+```
+sudo menthol-setup
+```
+
+It asks for new passwords, hostname, timezone and console keymap, and can create a user and
+new SSH host keys. The login message points to it until it has run once. Installers can use
+it without questions: `menthol-setup --root /mnt/target --non-interactive --hostname box`.
+
 ## Testing
 
 ```
@@ -141,7 +149,7 @@ MENTHOL_TEST_PW=<password of menthol> ./build.sh test bios
 ```
 
 The test boots the image in QEMU, logs in over the serial console and checks the user, sudo,
-HTTPS, git, sshd and the systemd state. It exits non-zero if any check fails. See the top of
+HTTPS, git, sshd, mpkg and the systemd state. It exits non-zero if any check fails. See the top of
 `scripts/vmtest.py` for the settings, for example `MENTHOL_TEST_SNAPSHOT=1` to leave the image
 untouched.
 

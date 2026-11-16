@@ -13,18 +13,21 @@ while [ $# -gt 0 ]; do
 done
 case $DESKTOP in none|xfce|kde|gnome) ;; *) echo "unknown desktop: $DESKTOP (none, xfce, kde, gnome)" >&2; exit 2 ;; esac
 HOST_STAGES="ch5-a ch5-b ch6"
-CHROOT_STAGES="ch7 ch8-a ch8-b ch8-c ch9 ch10-kernel boot-extras polish blfs blfs-git mpkg-setup blfs-extras hardening desktop"
+CHROOT_STAGES="ch7 ch8-a ch8-b ch8-c ch9 ch10-kernel boot-extras polish blfs blfs-git mpkg-setup packages hardening desktop"
 
 usage() {
   cat << EOT
 usage: build.sh [--desktop none|xfce|kde|gnome] COMMAND
 
+  mkimage           create and partition a new, empty menthol.img
+  fetch [DEST]      download and verify the LFS sources
   list              show the stages in build order
   mount | umount    attach/detach menthol.img at $LFS
   sync              copy scripts/ (and the host CA bundle) into the image at /lfs-scripts
   run STAGE...      run the given stages, in the order given
   all --yes         run every stage on a mounted, empty image (takes hours, rebuilds the whole system)
   test uefi|bios [VARS_FD]   boot the image in QEMU and run the checks (needs MENTHOL_TEST_PW)
+  test-mpkg         run the package manager tests (in a temporary directory)
   lint              syntax-check and shellcheck the scripts
 
 Host stages (run as your user, clean environment): $HOST_STAGES
@@ -46,6 +49,8 @@ sync_scripts() {
     sudo -n /usr/bin/chown "$(id -un)" "$LFS/lfs-scripts"
   fi
   cp -r "$SCRIPTS"/. "$LFS/lfs-scripts/"
+  rm -rf "$LFS/lfs-scripts/packages"
+  cp -r "$MENTHOL_HOME/packages" "$LFS/lfs-scripts/packages"
   for ca in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
     if [ -r "$ca" ]; then cp "$ca" "$LFS/lfs-scripts/ca-bundle.pem"; break; fi
   done
@@ -68,8 +73,12 @@ run_stage() {
       [ -n "$loop" ] || { echo "no loop device for $MENTHOL_IMG" >&2; exit 1; }
       vars=("LOOPDEV=$loop" "ROOT_PARTUUID=$(lsblk -no PARTUUID "${loop}p2")")
     fi
-    if [ "$st" = desktop ]; then
-      vars=("DESKTOP=$DESKTOP" "MENTHOL_DNS=$(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2> /dev/null | paste -sd' ')")
+    local dns
+    dns=$(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2> /dev/null | paste -sd' ')
+    [ "$st" = desktop ] && vars=("DESKTOP=$DESKTOP" "MENTHOL_DNS=$dns")
+    if [ "$st" = packages ]; then
+      vars=("MENTHOL_DNS=$dns")
+      [ -n "${PACKAGES:-}" ] && vars+=("PACKAGES=$PACKAGES")
     fi
     [ "$st" = hardening ] && [ -n "$SSH_KEY_ONLY" ] && vars+=("SSH_KEY_ONLY=$SSH_KEY_ONLY")
     if [ "$st" = ch7 ]; then
@@ -90,6 +99,9 @@ run_stage() {
 
 case ${1:-} in
   list) printf '%s\n' $HOST_STAGES $CHROOT_STAGES ;;
+  mkimage) "$SCRIPTS/mkimage.sh" ;;
+  fetch) shift; "$SCRIPTS/fetch-sources.sh" "$@" ;;
+  test-mpkg) "$MENTHOL_HOME/tests/mpkg-test.sh" ;;
   mount) "$SCRIPTS/mount-image.sh" ;;
   umount) "$SCRIPTS/umount-image.sh" ;;
   sync) sync_scripts ;;
@@ -106,10 +118,11 @@ case ${1:-} in
     exec python3 "$SCRIPTS/vmtest.py" "$@" ;;
   lint)
     rc=0
-    for f in "$MENTHOL_HOME"/*.sh "$SCRIPTS"/*.sh "$SCRIPTS"/files/*; do bash -n "$f" || rc=1; done
+    files=("$MENTHOL_HOME"/*.sh "$SCRIPTS"/*.sh "$SCRIPTS"/files/menthol-* "$SCRIPTS"/files/mpkg "$MENTHOL_HOME"/tests/*.sh)
+    for f in "${files[@]}" "$MENTHOL_HOME"/packages/*/recipe; do bash -n "$f" || rc=1; done
     python3 -m py_compile "$SCRIPTS/vmtest.py" || rc=1
     if command -v shellcheck > /dev/null; then
-      shellcheck -S error -s bash "$MENTHOL_HOME"/*.sh "$SCRIPTS"/*.sh "$SCRIPTS"/files/* || rc=1
+      shellcheck -S error -s bash "${files[@]}" || rc=1
     else
       echo "shellcheck is not installed, only the syntax was checked"
     fi

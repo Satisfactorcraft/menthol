@@ -1,0 +1,18 @@
+name=nano
+version=9.3
+desc="Small, friendly text editor"
+source=(https://www.nano-editor.org/dist/v9/nano-$version.tar.xz)
+sha256=(a9affc52c9596ee0682bcdd4ceb3c0b235eb221d83d733dfd9b0dff45897cb0d)
+build() {
+  cd nano-$version
+  ./configure --prefix=/usr --sysconfdir=/etc --enable-utf8 --docdir=/usr/share/doc/nano
+  make
+  make DESTDIR="$PKG" install
+  install -Dm644 /dev/stdin "$PKG/etc/nanorc" << "EOT"
+set autoindent
+set constantshow
+set linenumbers
+set tabsize 4
+include "/usr/share/nano/*.nanorc"
+EOT
+}
