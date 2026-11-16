@@ -43,6 +43,10 @@ MentholLinux is a Linux From Scratch build following the LFS 13.1 systemd book. 
 - Kernel: no initramfs, root found via `root=PARTUUID=...`, console on tty0 and ttyS0.
 - The chapter 7 chroot script was written inside the image and is not in this repo.
 - Root password is a temporary one set at build time. Change it with `passwd` after the first login.
+- Polish: branded prompt and MOTD (`/etc/profile.d/menthol.sh`), user `menthol` in `wheel` (temporary password), sudo.
+- BLFS: curl 8.21.0, wget 1.25.0, sudo 1.9.17p2 (no PAM), OpenSSH 10.5p1 (root login off, sshd enabled), git 2.55.0 (built with NO_RUST=1). HTTPS uses a CA bundle copied from the build host.
+- Boot: UEFI (removable path) and legacy BIOS (small bios_grub partition at sectors 34-2047); GRUB menu has normal, recovery (`rescue.target`) and verbose entries.
+- Helpers: `scripts/mount-image.sh`, `umount-image.sh`, `chroot.sh`, and `scripts/vmtest.py MODE VARS_FD` (uefi|bios) for automated boot checks.
 - Open: push `development` and open a PR (needs GitHub SSH host key verified and `gh` installed).
 
 ## QEMU test
