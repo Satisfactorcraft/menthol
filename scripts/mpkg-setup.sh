@@ -9,5 +9,11 @@ if [ ! -f /etc/mpkg/repos.conf ]; then
 menthol https://github.com/Satisfactorcraft/menthol/releases/download/packages
 EOT
 fi
+# The public key of the default repository: with it, unsigned or tampered package lists are rejected
+if [ -f /lfs-scripts/files/mpkg-menthol.pub ]; then
+  install -v -D -m644 /lfs-scripts/files/mpkg-menthol.pub /etc/mpkg/keys/menthol.pub
+else
+  echo "--- no scripts/files/mpkg-menthol.pub: package lists will NOT be signature-checked"
+fi
 mpkg version
 echo "=== DONE mpkg-setup"

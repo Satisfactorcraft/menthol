@@ -7,8 +7,10 @@
 #   pre-remove     optional script, run before the files are removed
 # A repository is a directory (or URL prefix) with the packages and an index file, mpkg.index:
 #   name|version-release|file|sha256|size|depends (comma separated)|description
+# and optionally mpkg.index.sig, an OpenSSL SHA-256 signature of the index.
+# A dependency is NAME or NAME>=VERSION (also =, <=, >, <).
 set -u
-MPKG_VERSION=0.1
+MPKG_VERSION=0.2
 
 ROOT=${MPKG_ROOT:-}
 YES=0; FORCE=0; REFRESH=1
@@ -31,6 +33,7 @@ INST=$DB/installed
 LISTS=$DB/lists
 CACHE=$ROOT/var/cache/mpkg
 NAME_RE='^[a-z0-9][a-z0-9+._-]*$'
+DEP_RE='^[a-z0-9][a-z0-9+._-]*((>=|<=|=|>|<)[A-Za-z0-9.+_~-]+)?$'
 
 msg() { echo "mpkg: $*"; }
 warn() { echo "mpkg: warning: $*" >&2; }
@@ -47,6 +50,7 @@ usage: mpkg [--root DIR] [-y] [--force] COMMAND [ARGS]
   remove NAME...          remove packages
   upgrade [NAME...]       refresh the lists and upgrade all (or the given) packages
   autoremove              remove dependencies that nothing needs any more
+  hold | unhold NAME...   keep a package at its version during upgrades
   search TERM             search the package lists
   info NAME               show details of a package
   list                    list installed packages
@@ -59,11 +63,14 @@ usage: mpkg [--root DIR] [-y] [--force] COMMAND [ARGS]
   build [OPTIONS] DIR     pack the file tree in DIR into a package
       -n NAME  -v VERSION  [-r RELEASE]  [-a ARCH]  [-d "DEP DEP"]  [-D "description"]
       [-o OUTDIR]  [--post-install FILE]  [--pre-remove FILE]  [--keep-owner]
-  index DIR               write DIR/mpkg.index for the packages in DIR
+  make [-o OUTDIR] [--install] RECIPE...   build packages from recipes (see packages/README.md)
+  index [--sign KEY] DIR  write DIR/mpkg.index (and mpkg.index.sig) for the packages in DIR
+  keygen DIR              create a signing key pair in DIR
 
 Options: --root DIR  work on a system mounted at DIR      -y  do not ask
          --force     ignore file conflicts and dependants  --no-refresh  upgrade without update
 Repositories: $CONF  (lines of "NAME URL")
+Keys:         $ROOT/etc/mpkg/keys/NAME.pub  (if present, the list of NAME must be signed with it)
 EOT
 }
 
@@ -92,7 +99,25 @@ repo_lines() { [ -f "$CONF" ] && grep -Ev '^[[:space:]]*(#|$)' "$CONF"; }
 fetch() {  # fetch URL DEST
   case $1 in
     /*) cp "$1" "$2" ;;
-    *) curl -fsSL --retry 3 -o "$2" "$1" ;;
+    *) if [ "${3:-}" = progress ] && [ -t 2 ]; then curl -fL --retry 3 --progress-bar -o "$2" "$1"
+       else curl -fsSL --retry 3 -o "$2" "$1"; fi ;;
+  esac
+}
+
+dep_name() { echo "${1%%[<>=]*}"; }
+dep_ok() {  # dep_ok SPEC VERSION-RELEASE: does the version satisfy a spec such as "foo>=1.2"?
+  local spec=$1 have=$2 name op want
+  name=${spec%%[<>=]*}
+  [ "$name" = "$spec" ] && return 0
+  op=${spec#"$name"}; want=${op##*[<>=]}; op=${op%"$want"}
+  case $want in *-*) ;; *) have=${have%-*} ;; esac
+  case $op in
+    "=") [ "$have" = "$want" ] ;;
+    ">=") [ "$have" = "$want" ] || newer "$have" "$want" ;;
+    "<=") [ "$have" = "$want" ] || newer "$want" "$have" ;;
+    ">") newer "$have" "$want" ;;
+    "<") newer "$want" "$have" ;;
+    *) return 1 ;;
   esac
 }
 
@@ -109,12 +134,23 @@ lookup() {
 
 cmd_update() {
   need_write
-  local rname url tmp n rc=0
+  local rname url tmp n rc=0 key
   repo_lines > /dev/null || die "no repositories configured in $CONF"
   while read -r rname url; do
     [[ $rname =~ $NAME_RE ]] || { warn "bad repository name in $CONF: $rname"; continue; }
     tmp=$DB/tmp.index
+    key=$ROOT/etc/mpkg/keys/$rname.pub
     if fetch "${url%/}/mpkg.index" "$tmp" 2> /dev/null; then
+      if [ -f "$key" ]; then  # a key for the repository means its list must carry a valid signature
+        if ! fetch "${url%/}/mpkg.index.sig" "$tmp.sig" 2> /dev/null ||
+           ! openssl dgst -sha256 -verify "$key" -signature "$tmp.sig" "$tmp" > /dev/null 2>&1; then
+          warn "$rname: the package list has no valid signature for $key, keeping the old list"
+          rm -f "$tmp" "$tmp.sig"; rc=1; continue
+        fi
+        rm -f "$tmp.sig"
+      else
+        warn "$rname: no key in $key, the package list is not verified"
+      fi
       awk -F'|' -v re="$NAME_RE" 'NF >= 7 && $1 ~ re && $3 !~ /\// && $4 ~ /^[0-9a-f]+$/' "$tmp" > "$LISTS/$rname.index"
       n=$(wc -l < "$LISTS/$rname.index")
       msg "$rname: $n packages"
@@ -129,13 +165,18 @@ cmd_update() {
 # --- dependency planning -------------------------------------------------------------------
 declare -A SEEN=() PLAN_URL=() PLAN_LINE=() REASON=()
 PLAN=()
-plan_add() {  # plan_add NAME MODE(install|upgrade) REASON WANTED_BY
-  local name=$1 mode=$2 reason=$3 by=${4:-} hit line deps dep
+plan_add() {  # plan_add NAME[>=VERSION] MODE(install|upgrade) REASON WANTED_BY
+  local spec=$1 name mode=$2 reason=$3 by=${4:-} hit line deps dep
+  name=$(dep_name "$spec")
   [ -n "${SEEN[$name]:-}" ] && return 0
   SEEN[$name]=1
-  if [ "$mode" = install ] && is_installed "$name"; then return 0; fi
+  if [ "$mode" = install ] && is_installed "$name"; then
+    dep_ok "$spec" "$(installed_version "$name")" && return 0   # otherwise it has to be upgraded
+  fi
   hit=$(lookup "$name") || die "package not found: $name${by:+ (needed by $by)} - try: mpkg update"
   line=${hit#*|}
+  dep_ok "$spec" "$(echo "$line" | cut -d'|' -f2)" ||
+    die "$by needs $spec, but the repositories only have $name $(echo "$line" | cut -d'|' -f2)"
   deps=$(echo "$line" | cut -d'|' -f6)
   for dep in ${deps//,/ }; do plan_add "$dep" install dep "$name"; done
   PLAN+=("$name"); PLAN_URL[$name]=${hit%%|*}; PLAN_LINE[$name]=$line; REASON[$name]=$reason
@@ -147,7 +188,7 @@ download() {  # download NAME -> path of the verified package in the cache
   dest=$CACHE/$file
   if [ ! -f "$dest" ] || [ "$(sha256sum "$dest" | cut -d' ' -f1)" != "$sum" ]; then
     msg "downloading $file" >&2
-    fetch "${url%/}/$file" "$dest" || die "download failed: ${url%/}/$file"
+    fetch "${url%/}/$file" "$dest" progress || die "download failed: ${url%/}/$file"
     [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$sum" ] || { rm -f "$dest"; die "checksum mismatch: $file"; }
   fi
   echo "$dest"
@@ -234,11 +275,13 @@ install_file() {  # install_file PACKAGE.tar.xz REASON
     remove_paths "$tmp/stale" "$tmp/dirs"
     [ -f "$INST/$name/reason" ] && reason=$(cat "$INST/$name/reason")
   fi
+  local held=0; [ -f "$INST/$name/hold" ] && held=1
 
   rm -rf "${INST:?}/$name"; mkdir -p "$INST/$name"
   cp "$tmp/x/.MPKG/info" "$tmp/files" "$INST/$name/"
   LC_ALL=C sort -u "$tmp/dirs" > "$INST/$name/dirs"
   echo "$reason" > "$INST/$name/reason"
+  [ $held -eq 1 ] && : > "$INST/$name/hold"
   for f in post-install pre-remove; do [ -f "$tmp/x/.MPKG/$f" ] && cp "$tmp/x/.MPKG/$f" "$INST/$name/$f"; done
   if grep -qE '(^|/)lib[^/]*/.*\.so' "$tmp/files"; then
     if [ -z "$ROOT" ]; then ldconfig 2> /dev/null || true; fi
@@ -285,7 +328,7 @@ dependants() {  # dependants NAME -> installed packages that depend on NAME
   local d
   for d in "$INST"/*/info; do
     [ -f "$d" ] || continue
-    if field "$d" depends | tr ' ' '\n' | grep -qxF "$1"; then basename "$(dirname "$d")"; fi
+    if field "$d" depends | tr ' ' '\n' | sed 's/[<>=].*//' | grep -qxF "$1"; then basename "$(dirname "$d")"; fi
   done
 }
 
@@ -349,7 +392,9 @@ cmd_upgrade() {
     is_installed "$name" || die "$name is not installed"
     hit=$(lookup "$name") || continue
     new=$(echo "${hit#*|}" | cut -d'|' -f2)
-    if newer "$new" "$(installed_version "$name")"; then plan_add "$name" upgrade explicit; fi
+    newer "$new" "$(installed_version "$name")" || continue
+    if [ -f "$INST/$name/hold" ]; then msg "$name is held back ($new is available)"; continue; fi
+    plan_add "$name" upgrade explicit
   done
   [ ${#PLAN[@]} -gt 0 ] || { msg "everything is up to date"; return 0; }
   run_plan
@@ -393,7 +438,8 @@ cmd_list() {
   for d in "$INST"/*/info; do
     [ -f "$d" ] || continue
     n=$(basename "$(dirname "$d")")
-    printf '%-24s %s\n' "$n" "$(installed_version "$n")"
+    if [ -f "$INST/$n/hold" ]; then printf '%-24s %s [held]\n' "$n" "$(installed_version "$n")"
+    else printf '%-24s %s\n' "$n" "$(installed_version "$n")"; fi
   done
 }
 
@@ -458,7 +504,7 @@ cmd_build() {
   case "$deps$desc" in *"|"*) die "depends and description must not contain '|'" ;; esac
   [ -d "$dir" ] || die "no such directory: $dir"
   [ -e "$dir/.MPKG" ] && die "$dir already has a .MPKG directory"
-  local d; for d in $deps; do [[ $d =~ $NAME_RE ]] || die "invalid dependency name: $d"; done
+  local d; for d in $deps; do [[ $d =~ $DEP_RE ]] || die "invalid dependency: $d (NAME or NAME>=VERSION)"; done
   mkdir -p "$out"
   local tmp file owner=(--owner=0 --group=0 --numeric-owner)
   [ $keep -eq 1 ] && owner=(--numeric-owner)
@@ -474,7 +520,9 @@ cmd_build() {
 }
 
 cmd_index() {
-  [ $# -eq 1 ] && [ -d "$1" ] || die "usage: mpkg index DIR"
+  local key=""
+  if [ "${1:-}" = --sign ]; then key=${2:-}; shift 2 || die "usage: mpkg index [--sign KEY] DIR"; fi
+  [ $# -eq 1 ] && [ -d "$1" ] || die "usage: mpkg index [--sign KEY] DIR"
   local f info n=0 tmp
   tmp=$(mktemp)
   for f in "$1"/*.tar.xz; do
@@ -487,6 +535,117 @@ cmd_index() {
   done
   LC_ALL=C sort "$tmp" > "$1/mpkg.index"; rm -f "$tmp"
   msg "wrote $1/mpkg.index ($n packages)"
+  rm -f "$1/mpkg.index.sig"
+  if [ -n "$key" ]; then
+    openssl dgst -sha256 -sign "$key" -out "$1/mpkg.index.sig" "$1/mpkg.index" || die "signing failed"
+    msg "wrote $1/mpkg.index.sig"
+  else
+    warn "the list is not signed (mpkg index --sign KEY DIR)"
+  fi
+}
+
+cmd_keygen() {
+  [ $# -eq 1 ] || die "usage: mpkg keygen DIR"
+  mkdir -p "$1"
+  [ -e "$1/mpkg.key" ] && die "$1/mpkg.key already exists"
+  (umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out "$1/mpkg.key" 2> /dev/null) || die "key generation failed"
+  openssl pkey -in "$1/mpkg.key" -pubout -out "$1/mpkg.pub" || die "key generation failed"
+  msg "private key: $1/mpkg.key  (keep it secret, never commit it)"
+  msg "public key:  $1/mpkg.pub  (install it as /etc/mpkg/keys/REPONAME.pub)"
+}
+
+cmd_hold() {  # cmd_hold hold|unhold NAME...
+  local what=$1 name; shift
+  [ $# -ge 1 ] || die "usage: mpkg $what NAME..."
+  need_write
+  for name in "$@"; do
+    is_installed "$name" || die "$name is not installed"
+    if [ "$what" = hold ]; then : > "$INST/$name/hold"; msg "$name is held back from upgrades"
+    else rm -f "$INST/$name/hold"; msg "$name follows upgrades again"; fi
+  done
+}
+
+# make_one RECIPE OUTDIR RESULTFILE: build a package from a recipe. Runs in a subshell; do not call it
+# from an if/&&/|| context, or "set -e" stops working inside build().
+make_one() (
+  recipe=$(readlink -f "$1"); out=$2; result=$3
+  rdir=$(dirname "$recipe")
+  name=""; version=""; release=1; arch=$(uname -m); desc=""; depends=""; options=""; source=(); sha256=()
+  unset -f build
+  # shellcheck disable=SC1090
+  . "$recipe" || die "cannot read $recipe"
+  [[ $name =~ $NAME_RE ]] || die "$recipe: missing or invalid name"
+  [ -n "$version" ] || die "$recipe: no version"
+  declare -F build > /dev/null || die "$recipe: no build() function"
+  work=$(mktemp -d "${TMPDIR:-/var/tmp}/mpkg-make.XXXXXX") || die "cannot create a work directory"
+  trap 'rm -rf "$work"' EXIT
+  SRC=$work/src; PKG=$work/pkg
+  mkdir -p "$SRC" "$PKG" "$work/dl"
+  for i in "${!source[@]}"; do
+    url=${source[$i]}; file=${url##*/}; sum=${sha256[$i]:-}
+    [ -n "$sum" ] || die "$name: no sha256 for $file"
+    srcfile=""
+    for d in "$rdir" ${MPKG_SOURCES:-/sources}; do
+      if [ -f "$d/$file" ]; then srcfile=$d/$file; break; fi
+    done
+    if [ -z "$srcfile" ]; then
+      case $url in *://*) ;; *) die "$name: $file not found in $rdir or ${MPKG_SOURCES:-/sources}" ;; esac
+      msg "downloading $file"
+      srcfile=$work/dl/$file
+      fetch "$url" "$srcfile" progress || die "download failed: $url"
+    fi
+    if [ "$sum" = SKIP ]; then warn "$name: $file is NOT checksum-verified (sha256 is SKIP)"
+    else [ "$(sha256sum "$srcfile" | cut -d' ' -f1)" = "$sum" ] || die "$name: checksum mismatch for $srcfile"; fi
+    case $file in
+      *.tar.*|*.tgz) tar -xf "$srcfile" -C "$SRC" || die "cannot unpack $file" ;;
+      *) cp "$srcfile" "$SRC/" ;;
+    esac
+  done
+  msg "building $name $version-$release"
+  export PKG SRC
+  export MAKEFLAGS=${MAKEFLAGS:--j$(nproc)}
+  (set -e; cd "$SRC"; build)
+  rc=$?
+  [ $rc -eq 0 ] || die "$name: build() failed"
+  rm -f "$PKG/usr/share/info/dir"
+  find "$PKG" -name '*.la' -delete
+  case " $options " in
+    *" nostrip "*) ;;
+    *) if command -v strip > /dev/null && command -v file > /dev/null; then
+         find "$PKG" -type f \( -perm -u+x -o -name '*.so*' \) -exec sh -c \
+           'file -b "$1" | grep -q "^ELF" && strip --strip-unneeded "$1" 2> /dev/null' _ {} \; || true
+       fi ;;
+  esac
+  args=(-n "$name" -v "$version" -r "$release" -a "$arch" -d "$depends" -D "$desc" -o "$out")
+  [ -f "$rdir/post-install" ] && args+=(--post-install "$rdir/post-install")
+  [ -f "$rdir/pre-remove" ] && args+=(--pre-remove "$rdir/pre-remove")
+  cmd_build "${args[@]}" "$PKG"
+  echo "$(cd "$out" && pwd)/$name-$version-$release-$arch.tar.xz" > "$result"
+)
+
+cmd_make() {
+  local out=. install=0 recipes=() r result rc
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -o) out=${2:-}; shift ;;
+      --install) install=1 ;;
+      -*) die "make: unknown option $1" ;;
+      *) recipes+=("$1") ;;
+    esac
+    shift
+  done
+  [ ${#recipes[@]} -ge 1 ] || die "usage: mpkg make [-o OUTDIR] [--install] RECIPE..."
+  [ $install -eq 1 ] && need_write
+  result=$(mktemp)
+  for r in "${recipes[@]}"; do
+    [ -d "$r" ] && r=$r/recipe
+    [ -f "$r" ] || die "no such recipe: $r"
+    make_one "$r" "$out" "$result"
+    rc=$?
+    [ $rc -eq 0 ] || { rm -f "$result"; exit $rc; }
+    [ $install -eq 1 ] && install_file "$(cat "$result")" explicit
+  done
+  rm -f "$result"
 }
 
 cmd=${ARGS[0]:-help}
@@ -507,6 +666,9 @@ case $cmd in
   clean) cmd_clean ;;
   build) cmd_build "$@" ;;
   index) cmd_index "$@" ;;
+  make) cmd_make "$@" ;;
+  keygen) cmd_keygen "$@" ;;
+  hold|unhold) cmd_hold "$cmd" "$@" ;;
   version|--version) echo "mpkg $MPKG_VERSION" ;;
   help|-h|--help) usage ;;
   *) echo "mpkg: unknown command: $cmd (see: mpkg help)" >&2; exit 2 ;;
