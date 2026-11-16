@@ -131,6 +131,7 @@ if booted:
             expect("wget over HTTPS", "wget -q -T 20 --spider https://www.linuxfromscratch.org", t=30)
         expect("git runs", "git --version", r"^git version \d")
         expect("ssh client runs", "ssh -V")
+        expect("mpkg runs", "mpkg version", r"^mpkg \d")
         expect("sshd is active", "systemctl is-active sshd", r"^active$")
         expect("system state is running", "systemctl is-system-running --wait", r"^running$", t=90)
         expect("no failed units", "systemctl --failed --no-legend | wc -l", r"^0$")

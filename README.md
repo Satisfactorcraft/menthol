@@ -14,6 +14,7 @@ extract (`book/`) and the build logs (`logs/`) live next to the checkout and are
 - GRUB for UEFI (removable path) and BIOS, with normal, recovery and verbose boot entries
 - curl, wget, sudo, OpenSSH (root login off) and git from BLFS
 - A branded prompt and MOTD, the user `menthol` in `wheel`, and `menthol-info` for a quick system summary
+- `mpkg`, a small package manager for `.tar.xz` packages with repositories, dependencies and upgrades
 - Optional: nano, htop, tmux, rsync, tree, which, nftables (`blfs-extras`) and security defaults (`hardening`)
 
 ## Requirements
@@ -45,8 +46,10 @@ extract (`book/`) and the build logs (`logs/`) live next to the checkout and are
 | `boot-extras` | chroot | GRUB for UEFI and BIOS, boot menu |
 | `polish` | chroot | prompt, MOTD, `menthol-info`, user `menthol` |
 | `blfs`, `blfs-git` | chroot | curl, wget, sudo, OpenSSH, git |
+| `mpkg-setup` | chroot | the `mpkg` package manager |
 | `blfs-extras` | chroot | optional tools, see below |
 | `hardening` | chroot | sysctl defaults, sshd settings, firewall |
+| `desktop` | chroot | the desktop picked with `--desktop` (default: none) |
 
 Host stages run as your user with a clean environment. Chroot stages are copied to
 `/lfs-scripts` inside the image and run there as root.
@@ -60,7 +63,7 @@ them with `MENTHOL_IMG` and `LFS`.
 
 ### Status of the newer scripts
 
-`ch7`, `blfs-extras` and `hardening` have not been run against an image yet. They pass a syntax
+`ch7`, `mpkg-setup`, `blfs-extras`, `hardening` and `desktop` have not been run against an image yet. They pass a syntax
 check and shellcheck, nothing more. `ch7` is a reconstruction from the book, because the script
 that built the current image was never committed. It refuses to run on a system that already
 has `/etc/passwd`.
@@ -77,6 +80,57 @@ pinned. `scripts/extras-sources.txt` lists where to get each tarball.
 installed and the installed kernel has nf_tables. `ch10-kernel` now turns that on, so an existing
 image needs a kernel rebuild first. `SSH_KEY_ONLY=1 ./build.sh run hardening` also turns off
 password logins over SSH.
+
+## Packages (mpkg)
+
+`mpkg` installs binary packages. A package is a `.tar.xz` with the files relative to `/` and a
+`.MPKG/info` file (name, version, dependencies). It is a single bash script and needs only
+tar, xz, curl and coreutils.
+
+```
+mpkg update              # download the package lists
+mpkg search nano
+mpkg install nano        # also installs dependencies
+mpkg install ./foo-1.0-1-x86_64.tar.xz
+mpkg upgrade             # refresh the lists and upgrade everything
+mpkg remove nano
+mpkg autoremove          # drop dependencies nothing needs any more
+mpkg list | info NAME | files NAME | owner PATH | verify | clean
+```
+
+It keeps changed files in `/etc` (the new version lands next to them as `.mpkgnew`), refuses
+to overwrite files of other packages, and only removes directories it created itself.
+`--root DIR` works on a system mounted somewhere else.
+
+Limits to know about: downloads are checked against the SHA-256 in the package list, but the
+list itself is not signed, so the repository is trusted as far as HTTPS goes. Dependencies have
+no version constraints. The LFS base system is not registered as packages, so do not list base
+libraries such as glibc as dependencies.
+
+### Publishing packages
+
+Repositories are listed in `/etc/mpkg/repos.conf`. The default one is the `packages` release
+of this GitHub repository. To publish:
+
+```
+make DESTDIR=$PWD/stage install                      # in the package's source tree
+mpkg build -n nano -v 8.5 -d "which" -D "Small text editor" -o out stage
+mpkg index out                                       # writes out/mpkg.index
+gh release upload packages out/* --clobber           # upload the packages and mpkg.index
+```
+
+Nothing has been published yet, so `mpkg update` finds no list until the `packages` release exists.
+
+### Desktop
+
+```
+./build.sh --desktop xfce run desktop
+```
+
+The `desktop` stage records the choice in `/etc/menthol/desktop` and runs
+`mpkg install desktop-<name>` for `xfce`, `kde` or `gnome`. Those are meta packages that pull in
+the whole desktop. They do not exist yet, so today only `--desktop none` (the default) works.
+An installer such as Calamares can offer the same choice later by running that one command.
 
 ## Testing
 

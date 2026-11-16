@@ -1,0 +1,513 @@
+#!/bin/bash
+# mpkg - the MentholLinux package manager
+#
+# Packages are plain .tar.xz archives: the files relative to /, plus a .MPKG/ directory with
+#   info           name=, version=, release=, arch=, depends= (space separated), desc=
+#   post-install   optional script, run after the files are in place
+#   pre-remove     optional script, run before the files are removed
+# A repository is a directory (or URL prefix) with the packages and an index file, mpkg.index:
+#   name|version-release|file|sha256|size|depends (comma separated)|description
+set -u
+MPKG_VERSION=0.1
+
+ROOT=${MPKG_ROOT:-}
+YES=0; FORCE=0; REFRESH=1
+ARGS=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --root) [ $# -ge 2 ] || { echo "mpkg: --root needs a directory" >&2; exit 2; }; ROOT=$2; shift ;;
+    --root=*) ROOT=${1#--root=} ;;
+    -y|--yes) YES=1 ;;
+    --force) FORCE=1 ;;
+    --no-refresh) REFRESH=0 ;;
+    *) ARGS+=("$1") ;;
+  esac
+  shift
+done
+ROOT=${ROOT%/}
+CONF=$ROOT/etc/mpkg/repos.conf
+DB=$ROOT/var/lib/mpkg
+INST=$DB/installed
+LISTS=$DB/lists
+CACHE=$ROOT/var/cache/mpkg
+NAME_RE='^[a-z0-9][a-z0-9+._-]*$'
+
+msg() { echo "mpkg: $*"; }
+warn() { echo "mpkg: warning: $*" >&2; }
+die() { echo "mpkg: error: $*" >&2; exit 1; }
+
+usage() {
+  cat << EOT
+mpkg $MPKG_VERSION - MentholLinux package manager
+
+usage: mpkg [--root DIR] [-y] [--force] COMMAND [ARGS]
+
+  update                  download the package lists
+  install NAME|FILE...    install packages (and their dependencies) by name or from .tar.xz files
+  remove NAME...          remove packages
+  upgrade [NAME...]       refresh the lists and upgrade all (or the given) packages
+  autoremove              remove dependencies that nothing needs any more
+  search TERM             search the package lists
+  info NAME               show details of a package
+  list                    list installed packages
+  files NAME              list the files of an installed package
+  owner PATH              show which package owns a file
+  verify [NAME...]        check that the files of installed packages still exist
+  repos                   show the configured repositories
+  clean                   delete downloaded packages from the cache
+
+  build [OPTIONS] DIR     pack the file tree in DIR into a package
+      -n NAME  -v VERSION  [-r RELEASE]  [-a ARCH]  [-d "DEP DEP"]  [-D "description"]
+      [-o OUTDIR]  [--post-install FILE]  [--pre-remove FILE]  [--keep-owner]
+  index DIR               write DIR/mpkg.index for the packages in DIR
+
+Options: --root DIR  work on a system mounted at DIR      -y  do not ask
+         --force     ignore file conflicts and dependants  --no-refresh  upgrade without update
+Repositories: $CONF  (lines of "NAME URL")
+EOT
+}
+
+field() { sed -n "s/^$2=//p" "$1" | head -n 1; }   # field FILE KEY
+is_installed() { [ -f "$INST/$1/info" ]; }
+installed_version() { echo "$(field "$INST/$1/info" version)-$(field "$INST/$1/info" release)"; }
+newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }  # $1 > $2
+
+need_write() {
+  if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then die "this needs root (try: sudo mpkg ...)"; fi
+  mkdir -p "$INST" "$LISTS" "$CACHE" 2> /dev/null || die "cannot write to $DB"
+  mkdir "$DB/lock" 2> /dev/null || die "another mpkg is running (if not, remove $DB/lock)"
+  trap 'rm -rf "$DB/lock" "$DB"/tmp.*' EXIT
+}
+
+confirm() {
+  [ $YES -eq 1 ] && return 0
+  [ -t 0 ] || return 0
+  local a
+  read -r -p "Continue? [Y/n] " a
+  case $a in ""|y|Y|yes) return 0 ;; *) die "aborted" ;; esac
+}
+
+repo_lines() { [ -f "$CONF" ] && grep -Ev '^[[:space:]]*(#|$)' "$CONF"; }
+
+fetch() {  # fetch URL DEST
+  case $1 in
+    /*) cp "$1" "$2" ;;
+    *) curl -fsSL --retry 3 -o "$2" "$1" ;;
+  esac
+}
+
+# lookup NAME -> "repo-url|index line" of the newest version in the first repository that has it
+lookup() {
+  local rname url line
+  while read -r rname url; do
+    [ -f "$LISTS/$rname.index" ] || continue
+    line=$(awk -F'|' -v n="$1" '$1 == n' "$LISTS/$rname.index" | sort -t'|' -k2,2V | tail -n 1)
+    if [ -n "$line" ]; then echo "$url|$line"; return 0; fi
+  done < <(repo_lines)
+  return 1
+}
+
+cmd_update() {
+  need_write
+  local rname url tmp n rc=0
+  repo_lines > /dev/null || die "no repositories configured in $CONF"
+  while read -r rname url; do
+    [[ $rname =~ $NAME_RE ]] || { warn "bad repository name in $CONF: $rname"; continue; }
+    tmp=$DB/tmp.index
+    if fetch "${url%/}/mpkg.index" "$tmp" 2> /dev/null; then
+      awk -F'|' -v re="$NAME_RE" 'NF >= 7 && $1 ~ re && $3 !~ /\// && $4 ~ /^[0-9a-f]+$/' "$tmp" > "$LISTS/$rname.index"
+      n=$(wc -l < "$LISTS/$rname.index")
+      msg "$rname: $n packages"
+    else
+      warn "$rname: cannot download ${url%/}/mpkg.index"; rc=1
+    fi
+    rm -f "$tmp"
+  done < <(repo_lines)
+  return $rc
+}
+
+# --- dependency planning -------------------------------------------------------------------
+declare -A SEEN=() PLAN_URL=() PLAN_LINE=() REASON=()
+PLAN=()
+plan_add() {  # plan_add NAME MODE(install|upgrade) REASON WANTED_BY
+  local name=$1 mode=$2 reason=$3 by=${4:-} hit line deps dep
+  [ -n "${SEEN[$name]:-}" ] && return 0
+  SEEN[$name]=1
+  if [ "$mode" = install ] && is_installed "$name"; then return 0; fi
+  hit=$(lookup "$name") || die "package not found: $name${by:+ (needed by $by)} - try: mpkg update"
+  line=${hit#*|}
+  deps=$(echo "$line" | cut -d'|' -f6)
+  for dep in ${deps//,/ }; do plan_add "$dep" install dep "$name"; done
+  PLAN+=("$name"); PLAN_URL[$name]=${hit%%|*}; PLAN_LINE[$name]=$line; REASON[$name]=$reason
+}
+
+download() {  # download NAME -> path of the verified package in the cache
+  local name=$1 line=${PLAN_LINE[$1]} url=${PLAN_URL[$1]} file sum dest
+  file=$(echo "$line" | cut -d'|' -f3); sum=$(echo "$line" | cut -d'|' -f4)
+  dest=$CACHE/$file
+  if [ ! -f "$dest" ] || [ "$(sha256sum "$dest" | cut -d' ' -f1)" != "$sum" ]; then
+    msg "downloading $file" >&2
+    fetch "${url%/}/$file" "$dest" || die "download failed: ${url%/}/$file"
+    [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$sum" ] || { rm -f "$dest"; die "checksum mismatch: $file"; }
+  fi
+  echo "$dest"
+}
+
+run_script() {  # run_script FILE
+  [ -f "$1" ] || return 0
+  if [ -z "$ROOT" ]; then
+    /bin/bash "$1" || warn "$(basename "$1") script failed"
+  elif [ "$(id -u)" -eq 0 ] && [ -x "$ROOT/bin/bash" ]; then
+    chroot "$ROOT" /bin/bash "${1#"$ROOT"}" || warn "$(basename "$1") script failed"
+  else
+    warn "skipped $(basename "$1") script (needs root to chroot into $ROOT)"
+  fi
+}
+
+remove_paths() {  # remove_paths LISTFILE DIRSFILE: delete listed files, and listed dirs that mpkg created
+  local p
+  sort -r "$1" | while IFS= read -r p; do
+    case $p in
+      "") ;;
+      */)  # a directory in the package: on disk it may be a symlink such as /lib, which is never ours to delete
+        if [ ! -L "$ROOT/${p%/}" ] && grep -qxF "$p" "$2" 2> /dev/null; then rmdir "$ROOT/$p" 2> /dev/null || true; fi ;;
+      *) if [ -L "$ROOT/$p" ] || [ ! -d "$ROOT/$p" ]; then rm -f "$ROOT/$p"; fi ;;
+    esac
+  done
+}
+
+install_file() {  # install_file PACKAGE.tar.xz REASON
+  local pkg=$1 reason=$2 tmp name ver arch old="" f others conflicts
+  tmp=$(mktemp -d "$DB/tmp.XXXXXX")
+  tar -tf "$pkg" > "$tmp/list" 2> /dev/null || die "cannot read $pkg"
+  if grep -qE '^/|(^|/)\.\.(/|$)' "$tmp/list"; then die "$pkg has unsafe paths, refusing to install it"; fi
+  mkdir "$tmp/x"
+  tar -xpf "$pkg" -C "$tmp/x" || die "cannot unpack $pkg"
+  [ -f "$tmp/x/.MPKG/info" ] || die "$pkg is not an mpkg package (no .MPKG/info)"
+  name=$(field "$tmp/x/.MPKG/info" name)
+  ver=$(field "$tmp/x/.MPKG/info" version)-$(field "$tmp/x/.MPKG/info" release)
+  arch=$(field "$tmp/x/.MPKG/info" arch)
+  [[ $name =~ $NAME_RE ]] || die "$pkg has an invalid package name"
+  case $arch in any|"$(uname -m)") ;; *) die "$name is built for $arch, this system is $(uname -m)" ;; esac
+  is_installed "$name" && old=$(installed_version "$name")
+
+  # directories are recorded with a trailing slash
+  (cd "$tmp/x" && find . -mindepth 1 -path ./.MPKG -prune -o \( -type d -printf '%P/\n' -o -printf '%P\n' \) | LC_ALL=C sort) > "$tmp/files"
+  grep -v '/$' "$tmp/files" > "$tmp/nondirs" || true
+
+  # files that belong to another package
+  others=$tmp/others; : > "$others"
+  for f in "$INST"/*/files; do
+    [ -f "$f" ] || continue
+    [ "$f" = "$INST/$name/files" ] || cat "$f" >> "$others"
+  done
+  conflicts=$(LC_ALL=C comm -12 "$tmp/nondirs" <(LC_ALL=C sort -u "$others") | head -n 5)
+  if [ -n "$conflicts" ]; then
+    if [ $FORCE -eq 1 ]; then warn "$name overwrites files of other packages"
+    else echo "$conflicts" | sed 's|^|  /|' >&2; die "$name conflicts with installed packages (use --force to overwrite)"; fi
+  fi
+
+  # keep changed configuration files, put the new version next to them
+  while IFS= read -r f; do
+    case $f in etc/*) ;; *) continue ;; esac
+    if [ -f "$tmp/x/$f" ] && [ ! -L "$tmp/x/$f" ] && [ -f "$ROOT/$f" ] && ! cmp -s "$tmp/x/$f" "$ROOT/$f"; then
+      mv "$tmp/x/$f" "$tmp/x/$f.mpkgnew"
+      msg "kept /$f, the new version is /$f.mpkgnew"
+    fi
+  done < "$tmp/nondirs"
+
+  # directories that do not exist yet are ours to remove later
+  : > "$tmp/dirs"
+  [ -f "$INST/$name/dirs" ] && cat "$INST/$name/dirs" > "$tmp/dirs"
+  while IFS= read -r f; do
+    case $f in */) [ -e "$ROOT/${f%/}" ] || [ -L "$ROOT/${f%/}" ] || echo "$f" >> "$tmp/dirs" ;; esac
+  done < "$tmp/files"
+
+  if [ -s "$tmp/files" ]; then
+    # top-level entries only: never touch the mode or owner of the root directory or existing directories
+    (cd "$tmp/x" && find . -mindepth 1 -maxdepth 1 ! -name .MPKG -printf '%P\0' | tar -cf - --null -T -) |
+      tar -xpf - -C "${ROOT:-/}" --keep-directory-symlink --no-overwrite-dir || die "installing the files of $name failed"
+  fi
+
+  if [ -n "$old" ]; then  # upgrade: drop files the new version no longer ships
+    LC_ALL=C comm -23 <(LC_ALL=C sort "$INST/$name/files") "$tmp/files" > "$tmp/stale"
+    remove_paths "$tmp/stale" "$tmp/dirs"
+    [ -f "$INST/$name/reason" ] && reason=$(cat "$INST/$name/reason")
+  fi
+
+  rm -rf "${INST:?}/$name"; mkdir -p "$INST/$name"
+  cp "$tmp/x/.MPKG/info" "$tmp/files" "$INST/$name/"
+  LC_ALL=C sort -u "$tmp/dirs" > "$INST/$name/dirs"
+  echo "$reason" > "$INST/$name/reason"
+  for f in post-install pre-remove; do [ -f "$tmp/x/.MPKG/$f" ] && cp "$tmp/x/.MPKG/$f" "$INST/$name/$f"; done
+  if grep -qE '(^|/)lib[^/]*/.*\.so' "$tmp/files"; then
+    if [ -z "$ROOT" ]; then ldconfig 2> /dev/null || true; fi
+  fi
+  run_script "$INST/$name/post-install"
+  rm -rf "$tmp"
+  if [ -n "$old" ]; then msg "upgraded $name $old -> $ver"; else msg "installed $name $ver"; fi
+}
+
+run_plan() {
+  local name
+  [ ${#PLAN[@]} -gt 0 ] || return 0
+  echo "Packages (${#PLAN[@]}):"
+  for name in "${PLAN[@]}"; do echo "  $name $(echo "${PLAN_LINE[$name]}" | cut -d'|' -f2)"; done
+  confirm
+  local -A path=()
+  for name in "${PLAN[@]}"; do path[$name]=$(download "$name") || exit 1; done   # everything is fetched before anything is installed
+  for name in "${PLAN[@]}"; do install_file "${path[$name]}" "${REASON[$name]}"; done
+}
+
+cmd_install() {
+  [ $# -ge 1 ] || die "install: no package given"
+  need_write
+  local a files=()
+  for a in "$@"; do
+    case $a in
+      *.tar.xz|*/*) [ -f "$a" ] || die "no such file: $a"; files+=("$a") ;;
+      *) if is_installed "$a"; then msg "$a is already installed ($(installed_version "$a"))"; else plan_add "$a" install explicit; fi ;;
+    esac
+  done
+  run_plan
+  for a in "${files[@]}"; do
+    # dependencies of a local file come from the repositories
+    local deps dep
+    deps=$(tar -xOf "$a" .MPKG/info 2> /dev/null | sed -n 's/^depends=//p')
+    PLAN=()
+    for dep in $deps; do plan_add "$dep" install dep "$(basename "$a")"; done
+    run_plan
+    install_file "$a" explicit
+  done
+}
+
+dependants() {  # dependants NAME -> installed packages that depend on NAME
+  local d
+  for d in "$INST"/*/info; do
+    [ -f "$d" ] || continue
+    if field "$d" depends | tr ' ' '\n' | grep -qxF "$1"; then basename "$(dirname "$d")"; fi
+  done
+}
+
+remove_one() {
+  local name=$1
+  run_script "$INST/$name/pre-remove"
+  remove_paths "$INST/$name/files" "$INST/$name/dirs"
+  rm -rf "${INST:?}/$name"
+  msg "removed $name"
+}
+
+cmd_remove() {
+  [ $# -ge 1 ] || die "remove: no package given"
+  need_write
+  local name d blockers
+  for name in "$@"; do is_installed "$name" || die "$name is not installed"; done
+  for name in "$@"; do
+    blockers=""
+    for d in $(dependants "$name"); do
+      case " $* " in *" $d "*) ;; *) blockers="$blockers $d" ;; esac
+    done
+    if [ -n "$blockers" ] && [ $FORCE -ne 1 ]; then die "$name is needed by:$blockers (remove those too, or use --force)"; fi
+  done
+  echo "Removing: $*"
+  confirm
+  for name in "$@"; do remove_one "$name"; done
+}
+
+cmd_autoremove() {
+  need_write
+  local d name found=1 list=()
+  while [ $found -eq 1 ]; do  # repeat: removing one orphan can orphan its own dependencies
+    found=0
+    for d in "$INST"/*/reason; do
+      [ -f "$d" ] || continue
+      name=$(basename "$(dirname "$d")")
+      case " ${list[*]:-} " in *" $name "*) continue ;; esac
+      [ "$(cat "$d")" = dep ] || continue
+      local needed=0 u
+      for u in $(dependants "$name"); do
+        case " ${list[*]:-} " in *" $u "*) ;; *) needed=1 ;; esac
+      done
+      if [ $needed -eq 0 ]; then list+=("$name"); found=1; fi
+    done
+  done
+  [ ${#list[@]} -gt 0 ] || { msg "nothing to remove"; return 0; }
+  echo "Removing: ${list[*]}"
+  confirm
+  for name in "${list[@]}"; do remove_one "$name"; done
+}
+
+cmd_upgrade() {
+  if [ $REFRESH -eq 1 ]; then (cmd_update) || warn "could not refresh every list, using what is there"; fi
+  need_write
+  local names=("$@") name hit new
+  if [ ${#names[@]} -eq 0 ]; then
+    for name in "$INST"/*/info; do [ -f "$name" ] && names+=("$(basename "$(dirname "$name")")"); done
+  fi
+  for name in "${names[@]:-}"; do
+    [ -n "$name" ] || continue
+    is_installed "$name" || die "$name is not installed"
+    hit=$(lookup "$name") || continue
+    new=$(echo "${hit#*|}" | cut -d'|' -f2)
+    if newer "$new" "$(installed_version "$name")"; then plan_add "$name" upgrade explicit; fi
+  done
+  [ ${#PLAN[@]} -gt 0 ] || { msg "everything is up to date"; return 0; }
+  run_plan
+}
+
+cmd_search() {
+  [ $# -eq 1 ] || die "usage: mpkg search TERM"
+  local rname url
+  while read -r rname url; do
+    [ -f "$LISTS/$rname.index" ] || continue
+    awk -F'|' -v t="$1" 'index(tolower($1), tolower(t)) || index(tolower($7), tolower(t)) { print $1 "|" $2 "|" $7 }' "$LISTS/$rname.index"
+  done < <(repo_lines) | sort -u | while IFS='|' read -r n v d; do
+    if is_installed "$n"; then printf '%-24s %-14s %s [installed]\n' "$n" "$v" "$d"; else printf '%-24s %-14s %s\n' "$n" "$v" "$d"; fi
+  done
+}
+
+cmd_info() {
+  [ $# -eq 1 ] || die "usage: mpkg info NAME"
+  local hit line
+  if is_installed "$1"; then
+    echo "Name:        $1"
+    echo "Version:     $(installed_version "$1")"
+    echo "Description: $(field "$INST/$1/info" desc)"
+    echo "Depends:     $(field "$INST/$1/info" depends)"
+    echo "Status:      installed ($(cat "$INST/$1/reason" 2> /dev/null)), $(grep -vc '/$' "$INST/$1/files") files"
+  elif hit=$(lookup "$1"); then
+    line=${hit#*|}
+    echo "Name:        $1"
+    echo "Version:     $(echo "$line" | cut -d'|' -f2)"
+    echo "Description: $(echo "$line" | cut -d'|' -f7-)"
+    echo "Depends:     $(echo "$line" | cut -d'|' -f6 | tr ',' ' ')"
+    echo "Size:        $(echo "$line" | cut -d'|' -f5) bytes (download)"
+    echo "Status:      not installed"
+  else
+    die "package not found: $1"
+  fi
+}
+
+cmd_list() {
+  local d n
+  for d in "$INST"/*/info; do
+    [ -f "$d" ] || continue
+    n=$(basename "$(dirname "$d")")
+    printf '%-24s %s\n' "$n" "$(installed_version "$n")"
+  done
+}
+
+cmd_files() {
+  [ $# -eq 1 ] || die "usage: mpkg files NAME"
+  is_installed "$1" || die "$1 is not installed"
+  grep -v '/$' "$INST/$1/files" | sed 's|^|/|'
+}
+
+cmd_owner() {
+  [ $# -eq 1 ] || die "usage: mpkg owner PATH"
+  local p=${1#/} f found=1
+  for f in "$INST"/*/files; do
+    [ -f "$f" ] || continue
+    if grep -qxF "$p" "$f"; then basename "$(dirname "$f")"; found=0; fi
+  done
+  [ $found -eq 0 ] || { echo "mpkg: no package owns /$p" >&2; return 1; }
+}
+
+cmd_verify() {
+  local names=("$@") name p rc=0 missing
+  if [ ${#names[@]} -eq 0 ]; then
+    for name in "$INST"/*/info; do [ -f "$name" ] && names+=("$(basename "$(dirname "$name")")"); done
+  fi
+  for name in "${names[@]:-}"; do
+    [ -n "$name" ] || continue
+    is_installed "$name" || die "$name is not installed"
+    missing=0
+    while IFS= read -r p; do
+      if [ ! -e "$ROOT/$p" ] && [ ! -L "$ROOT/$p" ]; then echo "$name: missing /$p"; missing=$((missing + 1)); fi
+    done < "$INST/$name/files"
+    [ $missing -eq 0 ] || rc=1
+  done
+  [ $rc -eq 0 ] && msg "all files are present"
+  return $rc
+}
+
+cmd_repos() { repo_lines | while read -r n u; do printf '%-16s %s\n' "$n" "$u"; done; }
+
+cmd_clean() {
+  need_write
+  rm -f "$CACHE"/*.tar.xz
+  msg "cache cleaned"
+}
+
+cmd_build() {
+  local name="" ver="" rel=1 arch="" deps="" desc="" out=. post="" pre="" keep=0 dir=""
+  arch=$(uname -m)
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -n) name=$2; shift ;;   -v) ver=$2; shift ;;   -r) rel=$2; shift ;;   -a) arch=$2; shift ;;
+      -d) deps=$2; shift ;;   -D) desc=$2; shift ;;  -o) out=$2; shift ;;
+      --post-install) post=$2; shift ;;  --pre-remove) pre=$2; shift ;;  --keep-owner) keep=1 ;;
+      -*) die "build: unknown option $1" ;;
+      *) dir=$1 ;;
+    esac
+    shift
+  done
+  [ -n "$name" ] && [ -n "$ver" ] && [ -n "$dir" ] || die "usage: mpkg build -n NAME -v VERSION [options] DIR"
+  [[ $name =~ $NAME_RE ]] || die "invalid package name: $name (lower case letters, digits, + . _ -)"
+  case "$ver$rel$arch" in *"|"*|*-*|*" "*) die "version, release and arch must not contain '-', '|' or spaces" ;; esac
+  case "$deps$desc" in *"|"*) die "depends and description must not contain '|'" ;; esac
+  [ -d "$dir" ] || die "no such directory: $dir"
+  [ -e "$dir/.MPKG" ] && die "$dir already has a .MPKG directory"
+  local d; for d in $deps; do [[ $d =~ $NAME_RE ]] || die "invalid dependency name: $d"; done
+  mkdir -p "$out"
+  local tmp file owner=(--owner=0 --group=0 --numeric-owner)
+  [ $keep -eq 1 ] && owner=(--numeric-owner)
+  tmp=$(mktemp -d); mkdir "$tmp/.MPKG"
+  printf 'name=%s\nversion=%s\nrelease=%s\narch=%s\ndepends=%s\ndesc=%s\n' "$name" "$ver" "$rel" "$arch" "$(echo $deps)" "$desc" > "$tmp/.MPKG/info"
+  [ -n "$post" ] && { cp "$post" "$tmp/.MPKG/post-install" || die "cannot read $post"; }
+  [ -n "$pre" ] && { cp "$pre" "$tmp/.MPKG/pre-remove" || die "cannot read $pre"; }
+  (cd "$dir" && find . -mindepth 1 -maxdepth 1 -printf '%P\0') > "$tmp/top"
+  file=$(cd "$out" && pwd)/$name-$ver-$rel-$arch.tar.xz
+  tar -cJf "$file" "${owner[@]}" -C "$tmp" .MPKG -C "$(cd "$dir" && pwd)" --null -T "$tmp/top" || { rm -rf "$tmp"; die "packing failed"; }
+  rm -rf "$tmp"
+  msg "built $file"
+}
+
+cmd_index() {
+  [ $# -eq 1 ] && [ -d "$1" ] || die "usage: mpkg index DIR"
+  local f info n=0 tmp
+  tmp=$(mktemp)
+  for f in "$1"/*.tar.xz; do
+    [ -f "$f" ] || continue
+    info=$(tar -xOf "$f" .MPKG/info 2> /dev/null) || { warn "skipping $f (not an mpkg package)"; continue; }
+    g() { echo "$info" | sed -n "s/^$1=//p" | head -n 1; }
+    printf '%s|%s-%s|%s|%s|%s|%s|%s\n' "$(g name)" "$(g version)" "$(g release)" "$(basename "$f")" \
+      "$(sha256sum "$f" | cut -d' ' -f1)" "$(stat -c %s "$f")" "$(g depends | tr ' ' ',')" "$(g desc)" >> "$tmp"
+    n=$((n + 1))
+  done
+  LC_ALL=C sort "$tmp" > "$1/mpkg.index"; rm -f "$tmp"
+  msg "wrote $1/mpkg.index ($n packages)"
+}
+
+cmd=${ARGS[0]:-help}
+set -- "${ARGS[@]:1}"
+case $cmd in
+  update) cmd_update ;;
+  install) cmd_install "$@" ;;
+  remove) cmd_remove "$@" ;;
+  upgrade) cmd_upgrade "$@" ;;
+  autoremove) cmd_autoremove ;;
+  search) cmd_search "$@" ;;
+  info) cmd_info "$@" ;;
+  list) cmd_list ;;
+  files) cmd_files "$@" ;;
+  owner) cmd_owner "$@" ;;
+  verify) cmd_verify "$@" ;;
+  repos) cmd_repos ;;
+  clean) cmd_clean ;;
+  build) cmd_build "$@" ;;
+  index) cmd_index "$@" ;;
+  version|--version) echo "mpkg $MPKG_VERSION" ;;
+  help|-h|--help) usage ;;
+  *) echo "mpkg: unknown command: $cmd (see: mpkg help)" >&2; exit 2 ;;
+esac

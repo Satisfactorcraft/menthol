@@ -3,12 +3,21 @@
 set -e
 . "$(dirname "$(readlink -f "$0")")/scripts/host-lib.sh"
 SCRIPTS=$MENTHOL_HOME/scripts
+DESKTOP=${DESKTOP:-none}
+while [ $# -gt 0 ]; do
+  case $1 in
+    --desktop) [ $# -ge 2 ] || { echo "--desktop needs a name: none, xfce, kde, gnome" >&2; exit 2; }; DESKTOP=$2; shift 2 ;;
+    --desktop=*) DESKTOP=${1#--desktop=}; shift ;;
+    *) break ;;
+  esac
+done
+case $DESKTOP in none|xfce|kde|gnome) ;; *) echo "unknown desktop: $DESKTOP (none, xfce, kde, gnome)" >&2; exit 2 ;; esac
 HOST_STAGES="ch5-a ch5-b ch6"
-CHROOT_STAGES="ch7 ch8-a ch8-b ch8-c ch9 ch10-kernel boot-extras polish blfs blfs-git blfs-extras hardening"
+CHROOT_STAGES="ch7 ch8-a ch8-b ch8-c ch9 ch10-kernel boot-extras polish blfs blfs-git mpkg-setup blfs-extras hardening desktop"
 
 usage() {
   cat << EOT
-usage: build.sh COMMAND
+usage: build.sh [--desktop none|xfce|kde|gnome] COMMAND
 
   list              show the stages in build order
   mount | umount    attach/detach menthol.img at $LFS
@@ -20,6 +29,9 @@ usage: build.sh COMMAND
 
 Host stages (run as your user, clean environment): $HOST_STAGES
 Chroot stages (run as root inside the image):      $CHROOT_STAGES
+
+--desktop picks what the "desktop" stage installs with mpkg (default: none). The desktop
+packages are not published yet, so only "none" works today.
 
 Settings (environment): MENTHOL_IMG=$MENTHOL_IMG  LFS=$LFS
 EOT
@@ -55,6 +67,9 @@ run_stage() {
       loop=$(losetup -j "$MENTHOL_IMG" -O NAME -n | head -n 1)
       [ -n "$loop" ] || { echo "no loop device for $MENTHOL_IMG" >&2; exit 1; }
       vars=("LOOPDEV=$loop" "ROOT_PARTUUID=$(lsblk -no PARTUUID "${loop}p2")")
+    fi
+    if [ "$st" = desktop ]; then
+      vars=("DESKTOP=$DESKTOP" "MENTHOL_DNS=$(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2> /dev/null | paste -sd' ')")
     fi
     [ "$st" = hardening ] && [ -n "$SSH_KEY_ONLY" ] && vars+=("SSH_KEY_ONLY=$SSH_KEY_ONLY")
     if [ "$st" = ch7 ]; then
