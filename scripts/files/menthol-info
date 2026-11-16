@@ -1,0 +1,78 @@
+#!/bin/bash
+# menthol-info: short system summary for MentholLinux
+# usage: menthol-info [--no-color] [--no-logo]
+color=1; logo=1
+[ -t 1 ] || color=0
+[ -n "$NO_COLOR" ] && color=0
+for a in "$@"; do
+  case $a in
+    --no-color) color=0 ;;
+    --no-logo) logo=0 ;;
+    -h|--help) echo "usage: menthol-info [--no-color] [--no-logo]"; exit 0 ;;
+    *) echo "menthol-info: unknown option: $a" >&2; exit 2 ;;
+  esac
+done
+if [ $color -eq 1 ]; then C=$'\e[1;36m'; G=$'\e[1;32m'; B=$'\e[1m'; R=$'\e[0m'; else C=; G=; B=; R=; fi
+
+PRETTY_NAME=Linux
+[ -r /etc/os-release ] && . /etc/os-release
+
+human_kib() {  # KiB -> human readable
+  awk -v k="$1" 'BEGIN { split("KiB MiB GiB TiB", u); i = 1; while (k >= 1024 && i < 4) { k /= 1024; i++ } printf "%.1f %s", k, u[i] }'
+}
+
+uptime_s=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+d=$((uptime_s / 86400)); h=$((uptime_s % 86400 / 3600)); m=$((uptime_s % 3600 / 60))
+up=""
+[ $d -gt 0 ] && up="${d}d "
+[ $h -gt 0 ] && up="$up${h}h "
+up="$up${m}m"
+
+mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+mem_avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null)
+if [ -n "$mem_total" ] && [ -n "$mem_avail" ]; then
+  mem="$(human_kib $((mem_total - mem_avail))) / $(human_kib "$mem_total")"
+else
+  mem=unknown
+fi
+
+cpu=$(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)
+cores=$(nproc 2>/dev/null || echo "?")
+disk=$(df -h / 2>/dev/null | awk 'NR==2 {print $3 " / " $2 " (" $5 ")"}')
+ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -n 3 | paste -sd' ')
+
+units=""
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  active=$(systemctl list-units --state=active --no-legend 2>/dev/null | wc -l)
+  failed=$(systemctl list-units --state=failed --no-legend 2>/dev/null | wc -l)
+  units="$active active, $failed failed"
+fi
+
+lines=(
+  "${B}${USER:-$(id -un)}${R}@${C}$(uname -n)${R}"
+  "${G}OS${R}       $PRETTY_NAME"
+  "${G}Kernel${R}   $(uname -sr)"
+  "${G}Uptime${R}   $up"
+  "${G}Shell${R}    ${SHELL:-unknown}"
+  "${G}CPU${R}      ${cpu:-unknown} ($cores)"
+  "${G}Memory${R}   $mem"
+  "${G}Disk /${R}   ${disk:-unknown}"
+)
+[ -n "$ip" ] && lines+=("${G}Address${R}  $ip")
+[ -n "$units" ] && lines+=("${G}Units${R}    $units")
+
+art=(
+'      .--.      '
+'    ./ /   \.   '
+'   /  / /    \  '
+'  |  / / /    | '
+'  | / / /     | '
+'   \ / /     /  '
+'    \.     ./   '
+'      `--`      '
+)
+n=${#lines[@]}; [ $logo -eq 1 ] && [ ${#art[@]} -gt "$n" ] && n=${#art[@]}
+for ((i = 0; i < n; i++)); do
+  if [ $logo -eq 1 ]; then printf '%s%s%s ' "$C" "${art[i]:-                }" "$R"; fi
+  printf '%s\n' "${lines[i]}"
+done

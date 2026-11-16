@@ -18,7 +18,7 @@ if [ -z "$MENTHOL_MOTD_SHOWN" ] && [ -r /etc/motd ] && shopt -q login_shell; the
   export MENTHOL_MOTD_SHOWN=1
 fi
 EOT
-cat >> /etc/profile << "EOT"
+grep -q 'MentholLinux: per-package shell snippets' /etc/profile || cat >> /etc/profile << "EOT"
 
 # MentholLinux: per-package shell snippets
 for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
@@ -48,6 +48,8 @@ EOT
 cp /etc/skel/.bash_profile /etc/skel/.bashrc /root/
 
 # Normal user in wheel (password set separately)
-getent group wheel >/dev/null
+getent group wheel >/dev/null || groupadd -g 97 wheel
 id menthol >/dev/null 2>&1 || useradd -m -G wheel -s /bin/bash menthol
+# menthol-info (system summary tool)
+if [ -f /lfs-scripts/files/menthol-info ]; then install -v -m755 /lfs-scripts/files/menthol-info /usr/bin/menthol-info; fi
 echo "=== DONE polish"

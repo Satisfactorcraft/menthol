@@ -15,7 +15,7 @@ NEW_LINE+='&& OPENSSL_VERSION_NUMBER < 0x40000000L'
 sed -i "/SSL3/c $NEW_LINE" src/openssl.c
 ./configure --prefix=/usr --sysconfdir=/etc --with-ssl=openssl --without-libpsl
 make && make install
-echo "ca_certificate=/etc/ssl/certs/ca-certificates.crt" >> /etc/wgetrc
+grep -q '^ca_certificate=' /etc/wgetrc || echo "ca_certificate=/etc/ssl/certs/ca-certificates.crt" >> /etc/wgetrc
 done_pkg
 
 unpack sudo-1.9.17p2.tar.gz
@@ -40,7 +40,7 @@ install -v -m755 contrib/ssh-copy-id /usr/bin
 install -v -m644 contrib/ssh-copy-id.1 /usr/share/man/man1
 install -v -m755 -d /usr/share/doc/openssh-10.5p1
 install -v -m644 INSTALL LICENCE OVERVIEW README* /usr/share/doc/openssh-10.5p1
-echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+grep -q '^PermitRootLogin no' /etc/ssh/sshd_config || echo "PermitRootLogin no" >> /etc/ssh/sshd_config
 done_pkg
 cat > /usr/lib/systemd/system/sshd.service << "EOT"
 [Unit]
@@ -59,9 +59,5 @@ WantedBy=multi-user.target
 EOT
 systemctl enable sshd
 
-unpack git-2.55.0.tar.xz
-./configure --prefix=/usr --with-gitconfig=/etc/gitconfig --with-python=python3 --with-libpcre2
-make NO_RUST=1
-make NO_RUST=1 perllibdir=/usr/lib/perl5/5.44/site_perl install
-done_pkg
+# git: see blfs-git.sh
 echo "=== DONE blfs"

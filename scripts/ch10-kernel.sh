@@ -10,13 +10,16 @@ $C -e NET -e INET -e IPV6 -e DEVTMPFS -e DEVTMPFS_MOUNT -e DMIID -e SYSFB_SIMPLE
 $C -e EFI -e EFI_STUB -e EXT4_FS -e VFAT_FS -e FAT_FS -e TMPFS -e TMPFS_POSIX_ACL -e TMPFS_XATTR -e AUTOFS_FS
 $C -e BLK_DEV_INITRD -e VIRTIO_BLK -e VIRTIO_PCI -e VIRTIO_NET -e SERIAL_8250 -e SERIAL_8250_CONSOLE
 $C -e INOTIFY_USER -e FHANDLE -e EPOLL -e SIGNALFD -e TIMERFD -e EVENTFD -e SECCOMP -e SECCOMP_FILTER -e NAMESPACES
+# nftables firewall (scripts/hardening.sh)
+$C -e NETFILTER -e NETFILTER_ADVANCED -e NF_CONNTRACK -e NF_TABLES -e NF_TABLES_INET -e NF_TABLES_IPV4 -e NF_TABLES_IPV6
+$C -e NFT_CT -e NFT_LOG -e NFT_LIMIT -e NFT_REJECT -e NFT_REJECT_INET -e NFT_NAT -e NFT_MASQ
 make olddefconfig
 grep -E '^CONFIG_(DEVTMPFS_MOUNT|EXT4_FS|EFI_STUB|VIRTIO_BLK|CGROUPS|IPV6|PSI)=' .config
 make
 make modules_install
-cp -iv arch/x86/boot/bzImage /boot/vmlinuz-7.1.8-menthol
-cp -iv System.map /boot/System.map-7.1.8
-cp -iv .config /boot/config-7.1.8
+cp -fv arch/x86/boot/bzImage /boot/vmlinuz-7.1.8-menthol
+cp -fv System.map /boot/System.map-7.1.8
+cp -fv .config /boot/config-7.1.8
 install -d /usr/share/doc/linux-7.1.8
 cp -r Documentation -T /usr/share/doc/linux-7.1.8
 done_pkg
