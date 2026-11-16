@@ -3,3 +3,4 @@ sources/
 book/
 logs/
 *.log
+__pycache__/

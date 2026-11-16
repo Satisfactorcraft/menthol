@@ -1,4 +1,6 @@
-set -e
+#!/bin/bash
+set -eE
+trap 'echo "FAILED: line $LINENO: $BASH_COMMAND" >&2' ERR
 : "${ROOT_PARTUUID:?ROOT_PARTUUID not set}"
 : "${LOOPDEV:?LOOPDEV not set}"
 # UEFI (removable path, no NVRAM writes) and legacy BIOS (needs a bios_grub partition on the GPT disk)
@@ -20,17 +22,17 @@ insmod search_label
 
 menuentry "MentholLinux 1.0" {
         search --no-floppy --set=root --label MentholRoot
-        linux   /boot/vmlinuz-7.1.8-menthol root=PARTUUID=${ROOT_PARTUUID} ro console=tty0 console=ttyS0,115200
+        linux   /boot/vmlinuz-7.1.8-menthol root=PARTUUID=${ROOT_PARTUUID} ro console=ttyS0,115200 console=tty0
 }
 
 menuentry "MentholLinux 1.0 (recovery shell)" {
         search --no-floppy --set=root --label MentholRoot
-        linux   /boot/vmlinuz-7.1.8-menthol root=PARTUUID=${ROOT_PARTUUID} ro console=tty0 console=ttyS0,115200 systemd.unit=rescue.target
+        linux   /boot/vmlinuz-7.1.8-menthol root=PARTUUID=${ROOT_PARTUUID} ro console=ttyS0,115200 console=tty0 systemd.unit=rescue.target
 }
 
 menuentry "MentholLinux 1.0 (verbose boot)" {
         search --no-floppy --set=root --label MentholRoot
-        linux   /boot/vmlinuz-7.1.8-menthol root=PARTUUID=${ROOT_PARTUUID} ro console=tty0 console=ttyS0,115200 loglevel=7 systemd.show_status=true
+        linux   /boot/vmlinuz-7.1.8-menthol root=PARTUUID=${ROOT_PARTUUID} ro console=ttyS0,115200 console=tty0 loglevel=7 systemd.show_status=true
 }
 # End /boot/grub/grub.cfg
 EOT

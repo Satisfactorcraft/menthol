@@ -1,4 +1,4 @@
-# Source this file: . /home/jan/LFS/lfs-env.sh
+# Source this file from the repo root: . ./lfs-env.sh
 set +h
 umask 022
 export LFS=/mnt/lfs

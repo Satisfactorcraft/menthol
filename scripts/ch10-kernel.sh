@@ -1,3 +1,4 @@
+#!/bin/bash
 . /lfs-scripts/ch8-lib.sh
 unpack linux-7.1.8.tar.xz
 make mrproper
@@ -14,9 +15,9 @@ make olddefconfig
 grep -E '^CONFIG_(DEVTMPFS_MOUNT|EXT4_FS|EFI_STUB|VIRTIO_BLK|CGROUPS|IPV6|PSI)=' .config
 make
 make modules_install
-cp -iv arch/x86/boot/bzImage /boot/vmlinuz-7.1.8-menthol
-cp -iv System.map /boot/System.map-7.1.8
-cp -iv .config /boot/config-7.1.8
+cp -v arch/x86/boot/bzImage /boot/vmlinuz-7.1.8-menthol
+cp -v System.map /boot/System.map-7.1.8
+cp -v .config /boot/config-7.1.8
 install -d /usr/share/doc/linux-7.1.8
 cp -r Documentation -T /usr/share/doc/linux-7.1.8
 done_pkg
