@@ -17,6 +17,12 @@ MentholLinux is a Linux From Scratch build following the LFS 13.1 systemd book. 
 - `scripts/ch5-a.sh`, `ch5-b.sh`: cross-toolchain, headers, glibc, libstdc++.
 - `scripts/ch6.sh`: cross-compiled temporary tools.
 - `scripts/ch8-lib.sh`, `ch8-a.sh`, `ch8-b.sh`, `ch8-c.sh`: final system, run inside the chroot.
+- `scripts/ch7.sh`: chapter 7, reconstructed from the book and not yet run (refuses to run if `/etc/passwd` exists).
+- `scripts/blfs-extras.sh`, `hardening.sh`: optional tools (unpinned versions, see `extras-sources.txt`) and security defaults. Not yet run against an image.
+- `scripts/files/menthol-info`: system summary tool, installed by `polish.sh`.
+- `scripts/host-lib.sh`: shared paths for host helpers (`MENTHOL_HOME`, `MENTHOL_IMG`, `LFS`); nothing hard-codes `/home/jan/LFS` any more.
+- `build.sh`: driver (`list`, `mount`, `umount`, `sync`, `run STAGE...`, `test`, `lint`), logs to `logs/<stage>.log`.
+- `.github/workflows/lint.yml`: runs `./build.sh lint` (bash -n, py_compile, shellcheck at error level).
 - Outside the repo: `menthol.img`, `sources/` (98 tarballs, md5-verified), `book/` (LFS 13.1 extract), `logs/`.
 
 ## Build workflow
@@ -46,7 +52,8 @@ MentholLinux is a Linux From Scratch build following the LFS 13.1 systemd book. 
 - Polish: branded prompt and MOTD (`/etc/profile.d/menthol.sh`), user `menthol` in `wheel` (temporary password), sudo.
 - BLFS: curl 8.21.0, wget 1.25.0, sudo 1.9.17p2 (no PAM), OpenSSH 10.5p1 (root login off, sshd enabled), git 2.55.0 (built with NO_RUST=1). HTTPS uses a CA bundle copied from the build host.
 - Boot: UEFI (removable path) and legacy BIOS (small bios_grub partition at sectors 34-2047); GRUB menu has normal, recovery (`rescue.target`) and verbose entries.
-- Helpers: `scripts/mount-image.sh`, `umount-image.sh`, `chroot.sh`, and `scripts/vmtest.py MODE VARS_FD` (uefi|bios) for automated boot checks.
+- Helpers: `scripts/mount-image.sh`, `umount-image.sh`, `chroot.sh`, and `scripts/vmtest.py MODE [VARS_FD]` (uefi|bios) for automated boot checks. It needs `MENTHOL_TEST_PW` and exits non-zero when a check fails.
+- `ch10-kernel.sh` enables nf_tables for the firewall; the current image's kernel predates that and needs a rebuild before `hardening.sh` can enable nftables.
 - Open: push `development` and open a PR (needs GitHub SSH host key verified and `gh` installed).
 
 ## QEMU test
