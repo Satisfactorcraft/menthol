@@ -1,3 +1,4 @@
+#!/bin/bash
 . /lfs-scripts/ch8-lib.sh
 unpack ncurses-6.6.tar.gz
 ./configure --prefix=/usr --mandir=/usr/share/man --with-shared --without-debug --without-normal --with-cxx-shared --enable-pc-files --with-pkg-config-libdir=/usr/lib/pkgconfig
@@ -17,7 +18,13 @@ make sources libs
 cp -av lib/lib*.so.5* /usr/lib
 done_pkg
 
-unpack sed-4.10.tar.xz; ./configure --prefix=/usr && make && make html && make install; install -vDm644 doc/sed.html -t /usr/share/doc/sed-4.10; done_pkg
+unpack sed-4.10.tar.xz
+./configure --prefix=/usr
+make
+make html
+make install
+install -vDm644 doc/sed.html -t /usr/share/doc/sed-4.10
+done_pkg
 unpack psmisc-23.7.tar.xz; std; done_pkg
 unpack gettext-1.0.tar.xz; std --disable-static --docdir=/usr/share/doc/gettext-1.0; chmod -v 0755 /usr/lib/preloadable_libintl.so; done_pkg
 unpack bison-3.8.2.tar.xz; std --docdir=/usr/share/doc/bison-3.8.2; done_pkg
@@ -31,7 +38,7 @@ unpack expat-2.8.3.tar.xz; std --disable-static --docdir=/usr/share/doc/expat-2.
 unpack inetutils-2.8.tar.gz
 sed -i 's/def HAVE_TERMCAP_TGETENT/ 1/' telnet/telnet.c
 std --bindir=/usr/bin --localstatedir=/var --disable-logger --disable-whois --disable-rcp --disable-rexec --disable-rlogin --disable-rsh --disable-servers
-mv -v /usr/{,s}bin/ifconfig
+if [ -e /usr/bin/ifconfig ]; then mv -v /usr/{,s}bin/ifconfig; fi
 done_pkg
 
 unpack less-704.tar.gz; std --sysconfdir=/etc; done_pkg
@@ -39,7 +46,8 @@ unpack less-704.tar.gz; std --sysconfdir=/etc; done_pkg
 unpack perl-5.44.0.tar.xz
 export BUILD_ZLIB=False BUILD_BZIP2=0
 sh Configure -des -D prefix=/usr -D vendorprefix=/usr -D privlib=/usr/lib/perl5/5.44/core_perl -D archlib=/usr/lib/perl5/5.44/core_perl -D sitelib=/usr/lib/perl5/5.44/site_perl -D sitearch=/usr/lib/perl5/5.44/site_perl -D vendorlib=/usr/lib/perl5/5.44/vendor_perl -D vendorarch=/usr/lib/perl5/5.44/vendor_perl -D man1dir=/usr/share/man/man1 -D man3dir=/usr/share/man/man3 -D pager="/usr/bin/less -isR" -D useshrplib -D usethreads
-make && make install
+make
+make install
 unset BUILD_ZLIB BUILD_BZIP2
 done_pkg
 
@@ -48,14 +56,17 @@ unpack automake-1.18.1.tar.xz; std --docdir=/usr/share/doc/automake-1.18.1; done
 
 unpack openssl-4.0.1.tar.gz
 ./config --prefix=/usr --openssldir=/etc/ssl --libdir=lib shared zlib-dynamic
-make && make INSTALL_LIBS= MANSUFFIX=ssl install
+make
+make INSTALL_LIBS= MANSUFFIX=ssl install
 mv -v /usr/share/doc/openssl /usr/share/doc/openssl-4.0.1
 cp -vfr doc/* /usr/share/doc/openssl-4.0.1
 done_pkg
 
 unpack elfutils-0.195.tar.bz2
 ./configure --prefix=/usr --disable-debuginfod --enable-libdebuginfod=dummy
-make -C lib && make -C libelf && make -C libelf install
+make -C lib
+make -C libelf
+make -C libelf install
 install -vm644 config/libelf.pc /usr/lib/pkgconfig
 rm /usr/lib/libelf.a
 done_pkg
@@ -65,7 +76,8 @@ unpack libffi-3.8.0.tar.gz; std --disable-static --with-gcc-arch=native; done_pk
 unpack sqlite-autoconf-3530400.tar.gz
 python3 -m zipfile -e $S/sqlite-doc-3530400.zip .
 ./configure --prefix=/usr --disable-static --enable-fts{4,5} CPPFLAGS="-D SQLITE_ENABLE_COLUMN_METADATA=1 -D SQLITE_ENABLE_UNLOCK_NOTIFY=1 -D SQLITE_ENABLE_DBSTAT_VTAB=1 -D SQLITE_SECURE_DELETE=1"
-make LDFLAGS.rpath="" && make install
+make LDFLAGS.rpath=""
+make install
 cp -v -R sqlite-doc-3530400 -T /usr/share/doc/sqlite-3.53.4
 done_pkg
 
@@ -74,7 +86,8 @@ unpack mpdecimal-4.0.1.tar.gz; std --disable-static --docdir=/usr/share/doc/mpde
 unpack Python-3.14.7.tar.xz
 patch -Np1 -i $S/Python-3.14.7-openssl_4-1.patch
 ./configure --prefix=/usr --enable-shared --with-system-expat --without-static-libpython
-make && make install
+make
+make install
 cat > /etc/pip.conf << EOT
 [global]
 root-user-action = ignore
@@ -96,6 +109,7 @@ done_pkg
 unpack kmod-34.2.tar.xz
 mkdir -p build; cd build
 meson setup --prefix=/usr .. --buildtype=release -D manpages=false
-ninja && ninja install
+ninja
+ninja install
 done_pkg
 echo "=== DONE ch8-b"

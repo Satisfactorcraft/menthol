@@ -1,3 +1,4 @@
+#!/bin/bash
 . /lfs-scripts/ch8-lib.sh
 unpack man-pages-6.18.tar.xz; rm -v man3/crypt*; make -R GIT=false prefix=/usr install; done_pkg
 unpack iana-etc-20260805.tar.gz; cp -v services protocols /etc; done_pkg
@@ -74,8 +75,15 @@ for i in /usr/bin/{bzcat,bunzip2}; do ln -sfv bzip2 $i; done
 rm -fv /usr/lib/libbz2.a; done_pkg
 
 unpack xz-5.8.3.tar.xz; std --disable-static --docdir=/usr/share/doc/xz-5.8.3; done_pkg
-unpack lz4-1.10.0.tar.gz; make BUILD_STATIC=no PREFIX=/usr && make BUILD_STATIC=no PREFIX=/usr install; done_pkg
-unpack zstd-1.5.7.tar.gz; make prefix=/usr && make prefix=/usr install && rm -v /usr/lib/libzstd.a; done_pkg
+unpack lz4-1.10.0.tar.gz
+make BUILD_STATIC=no PREFIX=/usr
+make BUILD_STATIC=no PREFIX=/usr install
+done_pkg
+unpack zstd-1.5.7.tar.gz
+make prefix=/usr
+make prefix=/usr install
+rm -v /usr/lib/libzstd.a
+done_pkg
 unpack file-5.48.tar.gz; std; done_pkg
 
 unpack readline-8.3.tar.gz
@@ -88,15 +96,20 @@ sed -e '270a\
     -e '288i\   result = -1;' \
     -i.orig input.c
 ./configure --prefix=/usr --disable-static --with-curses --docdir=/usr/share/doc/readline-8.3
-make SHLIB_LIBS="-lncursesw" && make install
+make SHLIB_LIBS="-lncursesw"
+make install
 install -v -m644 doc/*.{ps,pdf,html,dvi} /usr/share/doc/readline-8.3; done_pkg
 
 unpack pcre2-10.47.tar.bz2
 std --docdir=/usr/share/doc/pcre2-10.47 --enable-unicode --enable-jit --enable-pcre2-16 --enable-pcre2-32 --enable-pcre2grep-libz --enable-pcre2grep-libbz2 --enable-pcre2test-libreadline --disable-static; done_pkg
 
 unpack m4-1.4.21.tar.xz; std; done_pkg
-unpack bc-7.0.3.tar.xz; CC='gcc -std=c99' ./configure --prefix=/usr -G -O3 -r && make && make install; done_pkg
-unpack flex-2.6.4.tar.gz; std --disable-static --docdir=/usr/share/doc/flex-2.6.4; ln -sv flex /usr/bin/lex; ln -sv flex.1 /usr/share/man/man1/lex.1; done_pkg
+unpack bc-7.0.3.tar.xz
+CC='gcc -std=c99' ./configure --prefix=/usr -G -O3 -r
+make
+make install
+done_pkg
+unpack flex-2.6.4.tar.gz; std --disable-static --docdir=/usr/share/doc/flex-2.6.4; ln -sfv flex /usr/bin/lex; ln -sfv flex.1 /usr/share/man/man1/lex.1; done_pkg
 
 unpack ninja-1.13.2.tar.gz
 sed -i '/int Guess/a \
@@ -115,40 +128,57 @@ unpack pkgconf-3.0.5.tar.xz
 tar -xf $S/meson-1.12.0.tar.gz
 mkdir build; cd build
 python3 ../meson-1.12.0/meson.py setup --prefix=/usr --buildtype=release ..
-ninja && ninja install
+ninja
+ninja install
 mv /usr/share/doc/pkgconf{,-3.0.5}
-ln -sv pkgconf /usr/bin/pkg-config
-ln -sv pkgconf.1 /usr/share/man/man1/pkg-config.1
+ln -sfv pkgconf /usr/bin/pkg-config
+ln -sfv pkgconf.1 /usr/share/man/man1/pkg-config.1
 done_pkg
 
 unpack binutils-2.47.tar.xz
 mkdir -v build; cd build
 ../configure --prefix=/usr --sysconfdir=/etc --enable-ld=default --enable-plugins --enable-shared --disable-werror --enable-64-bit-bfd --enable-new-dtags --with-system-zlib --with-lib-path=/usr/lib --enable-default-hash-style=gnu
-make tooldir=/usr && make tooldir=/usr install
+make tooldir=/usr
+make tooldir=/usr install
 rm -rfv /usr/lib/lib{bfd,ctf,ctf-nobfd,gprofng,opcodes,sframe}.a /usr/share/doc/gprofng/
 done_pkg
 
 unpack gmp-6.3.0.tar.xz
 sed -i '/long long t1;/,+1s/()/(...)/' configure
 ./configure --prefix=/usr --enable-cxx --disable-static --docdir=/usr/share/doc/gmp-6.3.0
-make && make html && make install && make install-html; done_pkg
+make
+make html
+make install
+make install-html
+done_pkg
 unpack mpfr-4.2.2.tar.xz
 ./configure --prefix=/usr --disable-static --enable-thread-safe --docdir=/usr/share/doc/mpfr-4.2.2
-make && make html && make install && make install-html; done_pkg
+make
+make html
+make install
+make install-html
+done_pkg
 unpack mpc-1.4.1.tar.xz
 ./configure --prefix=/usr --disable-static --docdir=/usr/share/doc/mpc-1.4.1
-make && make html && make install && make install-html; done_pkg
+make
+make html
+make install
+make install-html
+done_pkg
 
 unpack attr-2.6.0.tar.gz; std --disable-static --sysconfdir=/etc --docdir=/usr/share/doc/attr-2.6.0; done_pkg
 unpack acl-2.4.0.tar.xz; std --disable-static --docdir=/usr/share/doc/acl-2.4.0; done_pkg
 unpack libcap-2.78.tar.xz
 sed -i '/install -m.*STA/d' libcap/Makefile
-make prefix=/usr lib=lib && make prefix=/usr lib=lib install; done_pkg
+make prefix=/usr lib=lib
+make prefix=/usr lib=lib install
+done_pkg
 
 unpack libxcrypt-4.5.2.tar.xz
 sed -i '/strchr/s/const//' lib/crypt-{sm3,gost}-yescrypt.c
 ./configure --prefix=/usr --enable-hashes=strong,glibc --enable-obsolete-api=no --disable-static --disable-failure-tokens
-make && make install
+make
+make install
 make distclean
 ./configure --prefix=/usr --enable-hashes=strong,glibc --enable-obsolete-api=glibc --disable-static --disable-failure-tokens
 make
@@ -161,7 +191,9 @@ find man -name Makefile.in -exec sed -i 's/passwd\.5 / /'   {} \;
 sed -e 's:#ENCRYPT_METHOD SHA512:ENCRYPT_METHOD YESCRYPT:' -e 's:/var/spool/mail:/var/mail:' -e '/PATH=/{s@/sbin:@@;s@/bin:@@}' -i etc/login.defs
 touch /usr/bin/passwd
 ./configure --sysconfdir=/etc --disable-static --with-{b,yes}crypt --without-libbsd --disable-logind --with-group-name-max-length=32
-make && make exec_prefix=/usr install && make -C man install-man
+make
+make exec_prefix=/usr install
+make -C man install-man
 pwconv; grpconv
 mkdir -p /etc/default
 useradd -D --gid 999
@@ -171,10 +203,11 @@ done_pkg
 
 unpack gawk-5.4.1.tar.xz
 sed -i 's/extras//' Makefile.in
-./configure --prefix=/usr && make
+./configure --prefix=/usr
+make
 rm -f /usr/bin/gawk-5.4.1
 make install
-ln -sv gawk.1 /usr/share/man/man1/awk.1
+ln -sfv gawk.1 /usr/share/man/man1/awk.1
 install -vDm644 doc/{awkforai.txt,*.{eps,pdf,jpg}} -t /usr/share/doc/gawk-5.4.1
 done_pkg
 
@@ -182,10 +215,11 @@ unpack gcc-16.2.0.tar.xz
 case $(uname -m) in x86_64) sed -e '/m64=/s/lib64/lib/' -i.orig gcc/config/i386/t-linux64 ;; esac
 mkdir -v build; cd build
 ../configure --prefix=/usr LD=ld --enable-languages=c,c++ --enable-default-pie --enable-default-ssp --enable-host-pie --enable-targets=all --disable-multilib --disable-bootstrap --disable-fixincludes --with-system-zlib
-make && make install
+make
+make install
 chown -v -R root:root $(gcc -print-file-name=include){,-fixed}
-ln -svr /usr/bin/cpp /usr/lib
-ln -sv gcc.1 /usr/share/man/man1/cc.1
+ln -sfvr /usr/bin/cpp /usr/lib
+ln -sfv gcc.1 /usr/share/man/man1/cc.1
 mkdir -pv /usr/lib/bfd-plugins
 ln -sfvr $(gcc -print-prog-name=liblto_plugin.so) /usr/lib/bfd-plugins/
 echo 'int main(){}' | cc -x c - -v -Wl,--verbose &> dummy.log
