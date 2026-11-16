@@ -38,7 +38,20 @@ MentholLinux is a Linux From Scratch build following the LFS 13.1 systemd book. 
 
 ## Status
 
-- Chapters 5, 6 and 7 are done.
-- Chapter 8: part A (man-pages through GCC) in progress; B and C written, not yet run.
-- Still to do: chapter 9 (config, os-release branding `MentholLinux`, fstab, network), chapter 10 (kernel linux-7.1.8, GRUB EFI, QEMU boot test).
-- Open decision: root password for the image.
+- All chapters are done. `menthol.img` boots in QEMU (OVMF + GRUB EFI) to `menthol login:` with 101 units OK and none failed.
+- Scripts: `ch9.sh` (config and branding), `ch10-kernel.sh` (Linux 7.1.8 from defconfig + kvm_guest.config), `ch10-grub.sh` (needs `ROOT_PARTUUID`).
+- Kernel: no initramfs, root found via `root=PARTUUID=...`, console on tty0 and ttyS0.
+- The chapter 7 chroot script was written inside the image and is not in this repo.
+- Root password is a temporary one set at build time. Change it with `passwd` after the first login.
+- Open: push `development` and open a PR (needs GitHub SSH host key verified and `gh` installed).
+
+## QEMU test
+
+```
+qemu-system-x86_64 -enable-kvm -cpu host -m 2G -smp 4 -machine q35 \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd \
+  -drive if=pflash,format=raw,file=vars.fd \
+  -drive file=menthol.img,format=raw,if=virtio -nic user,model=virtio-net-pci
+```
+
+`vars.fd` is a copy of `/usr/share/OVMF/OVMF_VARS_4M.fd`.
